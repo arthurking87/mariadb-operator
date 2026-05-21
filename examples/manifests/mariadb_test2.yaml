@@ -1,0 +1,32 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb
+  namespace: test2
+spec:
+  rootPasswordSecretKeyRef:
+    name: mariadb-root
+    key: password
+    generate: true
+
+  username: mariadb
+  passwordSecretKeyRef:
+    name: mariadb-password
+    key: password
+    generate: true
+  database: mariadb
+
+  port: 3306
+
+  storage:
+    size: 1Gi
+
+  service:
+    type: ClusterIP
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
