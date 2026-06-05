@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   ArrowLeft, RefreshCw, Database, Server, HardDrive, Clock,
   Shield, Activity, AlertCircle, Loader2, CheckCircle2,
-  XCircle, Zap, Network, Box, Copy, Check, Pencil, X, Cpu, MemoryStick,
+  XCircle, Zap, Network, Box, Copy, Check, Pencil, X, Cpu,
 } from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
@@ -76,6 +76,67 @@ function ErrorMsg({ msg }) {
   return (
     <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(248,81,73,0.1)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
       <AlertCircle size={14} />{msg}
+    </div>
+  )
+}
+
+// ── replica editor ───────────────────────────────────────────────────────────
+
+function ReplicaEditor({ namespace, name, replicas, onSaved }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue]     = useState(replicas)
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState(null)
+
+  const save = async () => {
+    const n = parseInt(value, 10)
+    if (isNaN(n) || n < 1) return setError('Must be ≥ 1')
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${name}/replicas`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replicas: n }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setEditing(false)
+      onSaved()
+    } catch (e) { setError(e.message) }
+    finally     { setSaving(false) }
+  }
+
+  if (!editing) return (
+    <button onClick={() => { setValue(replicas); setEditing(true) }}
+      className="flex items-center gap-1 group"
+      title="Edit replicas">
+      <span className="flex items-center gap-1" style={{ color: '#8b949e' }}>
+        <Server size={11} />{replicas} replicas
+      </span>
+      <Pencil size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: '#f97316' }} />
+    </button>
+  )
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <Server size={11} style={{ color: '#8b949e' }} />
+      <input type="number" value={value} onChange={e => setValue(e.target.value)} min={1} max={9}
+        className="w-12 px-2 py-0.5 rounded text-xs font-mono border outline-none text-center"
+        style={{ background: '#0d1117', borderColor: '#f97316', color: '#e6edf3' }}
+        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+        autoFocus />
+      <span className="text-xs" style={{ color: '#8b949e' }}>replicas</span>
+      <button onClick={save} disabled={saving}
+        className="flex items-center justify-center w-5 h-5 rounded"
+        style={{ background: saving ? '#30363d' : '#f97316', color: 'white' }}>
+        {saving ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+      </button>
+      <button onClick={() => { setEditing(false); setError(null) }}
+        className="flex items-center justify-center w-5 h-5 rounded"
+        style={{ background: '#30363d', color: '#8b949e' }}>
+        <X size={10} />
+      </button>
+      {error && <span className="text-xs" style={{ color: '#f85149' }}>{error}</span>}
     </div>
   )
 }
@@ -689,7 +750,7 @@ export default function InstanceDetail({ instanceKey, setPage }) {
                 <div className="flex items-center gap-3 text-xs" style={{ color: '#8b949e' }}>
                   <span className="flex items-center gap-1"><Database size={11} />{detail.version}</span>
                   <span>·</span>
-                  <span className="flex items-center gap-1"><Server size={11} />{detail.replicas} replicas</span>
+                  <ReplicaEditor namespace={namespace} name={name} replicas={detail.replicas} onSaved={() => fetchDetail(true)} />
                   <span>·</span>
                   <span className="flex items-center gap-1"><Clock size={11} />{detail.age}</span>
                   <span>·</span>

@@ -382,6 +382,21 @@ app.get('/api/instances/:namespace/:name/events', async (req, res) => {
   }
 })
 
+// Patch replicas for an instance
+app.patch('/api/instances/:namespace/:name/replicas', async (req, res) => {
+  const { namespace, name } = req.params
+  const { replicas } = req.body
+  if (!replicas || replicas < 1) return res.status(400).json({ error: 'replicas must be >= 1' })
+  try {
+    await execAsync(
+      `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify({ spec: { replicas } })}'`
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // Patch resources (cpu/memory) for an instance
 app.patch('/api/instances/:namespace/:name/resources', async (req, res) => {
   const { namespace, name } = req.params
