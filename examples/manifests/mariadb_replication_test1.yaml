@@ -1,0 +1,37 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-repl
+  namespace: test1
+spec:
+  rootPasswordSecretKeyRef:
+    name: mariadb
+    key: root-password
+
+  storage:
+    size: 1Gi
+    storageClassName: standard
+
+  replicas: 3
+
+  replication:
+    enabled: true
+    primary:
+      autoFailover: true
+      autoFailoverDelay: 0s
+    replica:
+      replPasswordSecretKeyRef:
+        name: mariadb
+        key: password
+      connectionRetrySeconds: 10
+    gtidStrictMode: true
+    semiSyncEnabled: true
+
+  service:
+    type: ClusterIP
+
+  primaryService:
+    type: ClusterIP
+
+  secondaryService:
+    type: ClusterIP
