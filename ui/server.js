@@ -264,7 +264,8 @@ app.get('/api/instances/:namespace/:name', async (req, res) => {
       status: ready?.status === 'True' ? 'Running' : (ready ? 'Not Ready' : 'Pending'),
       statusMessage: ready?.message ?? '',
       primary: status.currentPrimary ?? `${meta.name}-0`,
-      version: spec.image?.tag ?? status.defaultVersion ?? '—',
+      image: spec.image ?? '',
+      version: (() => { const img = spec.image ?? ''; return img.includes(':') ? img.split(':').pop() : (status.defaultVersion ?? '—') })(),
       storage: spec.storage?.size ?? '—',
       storageClass: spec.storage?.storageClassName ?? '—',
       serviceType: spec.service?.type ?? 'ClusterIP',
@@ -377,6 +378,84 @@ app.get('/api/instances/:namespace/:name/events', async (req, res) => {
         lastTime: e.lastTimestamp,
       }))
     res.json({ events })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Storage size comparison helper (returns bytes as float)
+function parseStorageBytes(size) {
+  const m = String(size).trim().match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti|K|M|G|T)?$/i)
+  if (!m) return null
+  const n = parseFloat(m[1])
+  const table = { '': 1, k: 1e3, m: 1e6, g: 1e9, t: 1e12, ki: 1024, mi: 1048576, gi: 1073741824, ti: 1099511627776 }
+  return n * (table[(m[2] ?? '').toLowerCase()] ?? 1)
+}
+
+// Patch image (version) for an instance
+app.patch('/api/instances/:namespace/:name/image', async (req, res) => {
+  const { namespace, name } = req.params
+  const { image } = req.body
+  if (!image) return res.status(400).json({ error: 'image is required' })
+  try {
+    await execAsync(
+      `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify({ spec: { image } })}'`
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Patch storage size (increase only)
+app.patch('/api/instances/:namespace/:name/storage-size', async (req, res) => {
+  const { namespace, name } = req.params
+  const { size } = req.body
+  if (!size) return res.status(400).json({ error: 'size is required' })
+  try {
+    const { stdout } = await execAsync(`kubectl get mariadb ${name} -n ${namespace} -o json`)
+    const current = JSON.parse(stdout).spec?.storage?.size ?? '0'
+    const currentBytes = parseStorageBytes(current)
+    const newBytes = parseStorageBytes(size)
+    if (newBytes === null) return res.status(400).json({ error: `Invalid size format: ${size}` })
+    if (currentBytes !== null && newBytes <= currentBytes)
+      return res.status(400).json({ error: `New size (${size}) must be larger than current size (${current})` })
+    await execAsync(
+      `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify({ spec: { storage: { size } } })}'`
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.stderr || err.message })
+  }
+})
+
+// Patch storage class
+app.patch('/api/instances/:namespace/:name/storage-class', async (req, res) => {
+  const { namespace, name } = req.params
+  const { storageClassName } = req.body
+  if (!storageClassName) return res.status(400).json({ error: 'storageClassName is required' })
+  try {
+    await execAsync(
+      `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify({ spec: { storage: { storageClassName } } })}'`
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Patch service type (applies to service, primaryService, secondaryService)
+app.patch('/api/instances/:namespace/:name/service-type', async (req, res) => {
+  const { namespace, name } = req.params
+  const { serviceType } = req.body
+  const allowed = ['ClusterIP', 'NodePort', 'LoadBalancer']
+  if (!allowed.includes(serviceType)) return res.status(400).json({ error: `serviceType must be one of: ${allowed.join(', ')}` })
+  try {
+    const patch = { spec: { service: { type: serviceType }, primaryService: { type: serviceType }, secondaryService: { type: serviceType } } }
+    await execAsync(
+      `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify(patch)}'`
+    )
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

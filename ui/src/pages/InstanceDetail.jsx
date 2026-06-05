@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   ArrowLeft, RefreshCw, Database, Server, HardDrive, Clock,
   Shield, Activity, AlertCircle, Loader2, CheckCircle2,
-  XCircle, Zap, Network, Box, Copy, Check, Pencil, X, Cpu,
+  XCircle, Zap, Network, Box, Copy, Check, Pencil, X, Cpu, ChevronDown,
 } from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
@@ -160,6 +160,158 @@ function ReplicaCard({ namespace, name, replicas, onSaved }) {
         </div>
       )}
     </div>
+  )
+}
+
+// ── generic editable meta card ────────────────────────────────────────────────
+
+function EditableMetaCard({ label, icon: Icon, accent, displayValue, onSave, children }) {
+  const [editing, setEditing]   = useState(false)
+  const [saving,  setSaving]    = useState(false)
+  const [error,   setError]     = useState(null)
+
+  const handleSave = async (value) => {
+    setSaving(true); setError(null)
+    try {
+      await onSave(value)
+      setEditing(false)
+    } catch (e) { setError(e.message) }
+    finally     { setSaving(false) }
+  }
+  const handleCancel = () => { setEditing(false); setError(null) }
+
+  return (
+    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <div className="flex items-center gap-2 mb-2">
+        <Icon size={13} color={accent} />
+        <span className="text-xs font-medium uppercase tracking-wider" style={{ color: '#8b949e' }}>{label}</span>
+      </div>
+      {!editing ? (
+        <div className="flex items-end justify-between gap-2">
+          <div className="text-sm font-semibold truncate font-mono" style={{ color: '#e6edf3' }}>{displayValue}</div>
+          <button onClick={() => setEditing(true)}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border flex-shrink-0 transition-colors"
+            style={{ borderColor: '#30363d', color: '#8b949e' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#f97316'; e.currentTarget.style.color = '#f97316' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#8b949e' }}>
+            <Pencil size={10} />Edit
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2 mt-1">
+          {children({ onSave: handleSave, onCancel: handleCancel, saving })}
+          {error && (
+            <div className="flex items-center gap-1.5 text-xs p-2 rounded-lg"
+              style={{ background: 'rgba(248,81,73,0.1)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
+              <AlertCircle size={11} />{error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SaveCancelRow({ onSave, onCancel, saving, value }) {
+  return (
+    <div className="flex gap-2">
+      <button onClick={onCancel} className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border flex-1 justify-center"
+        style={{ borderColor: '#30363d', color: '#8b949e' }}>
+        <X size={10} />Cancel
+      </button>
+      <button onClick={() => onSave(value)} disabled={saving}
+        className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg font-medium flex-1 justify-center"
+        style={{ background: saving ? '#30363d' : 'linear-gradient(135deg,#f97316,#ea580c)', color: saving ? '#8b949e' : 'white', cursor: saving ? 'not-allowed' : 'pointer' }}>
+        {saving ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+        {saving ? 'Saving…' : 'Apply'}
+      </button>
+    </div>
+  )
+}
+
+// ── specific editable cards ───────────────────────────────────────────────────
+
+function TextEditInput({ init, onSave, onCancel, saving, placeholder, warning }) {
+  const [val, setVal] = useState(init)
+  return (
+    <>
+      {warning && <div className="flex items-center gap-1 text-xs mb-1" style={{ color: '#d29922' }}><AlertCircle size={11} />{warning}</div>}
+      <input value={val} onChange={e => setVal(e.target.value)} placeholder={placeholder} autoFocus
+        className="w-full px-2 py-1.5 rounded-lg text-xs font-mono border outline-none"
+        style={{ background: '#0d1117', borderColor: '#30363d', color: '#e6edf3' }}
+        onFocus={e => e.target.style.borderColor = '#f97316'}
+        onBlur={e => e.target.style.borderColor = '#30363d'}
+        onKeyDown={e => { if (e.key === 'Enter') onSave(val); if (e.key === 'Escape') onCancel() }} />
+      <SaveCancelRow onSave={onSave} onCancel={onCancel} saving={saving} value={val} />
+    </>
+  )
+}
+
+function VersionCard({ namespace, name, detail, onRefresh }) {
+  const save = async (tag) => {
+    const repo = detail.image?.includes(':') ? detail.image.split(':').slice(0, -1).join(':') : (detail.image || 'docker-registry1.mariadb.com/library/mariadb')
+    const res = await fetch(`/api/instances/${namespace}/${name}/image`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: `${repo}:${tag}` }) })
+    const d = await res.json(); if (!res.ok) throw new Error(d.error)
+    onRefresh()
+  }
+  return (
+    <EditableMetaCard label="Version" icon={Database} accent="#58a6ff" displayValue={detail.version} onSave={save}>
+      {(props) => <TextEditInput {...props} init={detail.version === '—' ? '' : detail.version} placeholder="e.g. 11.8.5" />}
+    </EditableMetaCard>
+  )
+}
+
+function StorageCard({ namespace, name, detail, onRefresh }) {
+  const save = async (size) => {
+    const res = await fetch(`/api/instances/${namespace}/${name}/storage-size`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ size }) })
+    const d = await res.json(); if (!res.ok) throw new Error(d.error)
+    onRefresh()
+  }
+  return (
+    <EditableMetaCard label="Storage" icon={HardDrive} accent="#bc8cff" displayValue={detail.storage} onSave={save}>
+      {(props) => <TextEditInput {...props} init={detail.storage === '—' ? '' : detail.storage} placeholder="e.g. 20Gi" warning="Can only increase storage size" />}
+    </EditableMetaCard>
+  )
+}
+
+function StorageClassCard({ namespace, name, detail, onRefresh }) {
+  const save = async (storageClassName) => {
+    const res = await fetch(`/api/instances/${namespace}/${name}/storage-class`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ storageClassName }) })
+    const d = await res.json(); if (!res.ok) throw new Error(d.error)
+    onRefresh()
+  }
+  return (
+    <EditableMetaCard label="Storage Class" icon={HardDrive} accent="#8b949e" displayValue={detail.storageClass} onSave={save}>
+      {(props) => <TextEditInput {...props} init={detail.storageClass === '—' ? '' : detail.storageClass} placeholder="e.g. standard" />}
+    </EditableMetaCard>
+  )
+}
+
+function ServiceTypeCard({ namespace, name, detail, onRefresh }) {
+  const [val, setVal] = useState(detail.serviceType)
+  const save = async (serviceType) => {
+    const res = await fetch(`/api/instances/${namespace}/${name}/service-type`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serviceType }) })
+    const d = await res.json(); if (!res.ok) throw new Error(d.error)
+    onRefresh()
+  }
+  return (
+    <EditableMetaCard label="Service Type" icon={Network} accent="#8b949e" displayValue={detail.serviceType} onSave={save}>
+      {({ onSave, onCancel, saving }) => (
+        <>
+          <div className="relative">
+            <select value={val} onChange={e => setVal(e.target.value)}
+              className="w-full px-2 py-1.5 rounded-lg text-xs border outline-none appearance-none"
+              style={{ background: '#0d1117', borderColor: '#30363d', color: '#e6edf3' }}
+              onFocus={e => e.target.style.borderColor = '#f97316'}
+              onBlur={e => e.target.style.borderColor = '#30363d'}>
+              {['ClusterIP', 'NodePort', 'LoadBalancer'].map(t => <option key={t}>{t}</option>)}
+            </select>
+            <ChevronDown size={11} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: '#8b949e' }} />
+          </div>
+          <SaveCancelRow onSave={onSave} onCancel={onCancel} saving={saving} value={val} />
+        </>
+      )}
+    </EditableMetaCard>
   )
 }
 
@@ -343,12 +495,23 @@ function OverviewTab({ detail, namespace, name, onRefresh }) {
     <div className="space-y-6">
       {/* Meta cards */}
       <div className="grid grid-cols-3 gap-3">
-        <MetaCard label="Version"       value={detail.version}      icon={Database}  accent="#58a6ff" />
+
+        {/* Version */}
+        <VersionCard namespace={namespace} name={name} detail={detail} onRefresh={onRefresh} />
+
+        {/* Replicas */}
         <ReplicaCard namespace={namespace} name={name} replicas={detail.replicas} onSaved={onRefresh} />
-        <MetaCard label="Storage"       value={detail.storage}      icon={HardDrive} accent="#bc8cff" />
-        <MetaCard label="Storage Class" value={detail.storageClass} icon={HardDrive} accent="#8b949e" />
-        <MetaCard label="Service Type"  value={detail.serviceType}  icon={Network}   accent="#8b949e" />
-        <MetaCard label="Age"           value={detail.age}          icon={Clock}     accent="#8b949e" />
+
+        {/* Storage (increase only) */}
+        <StorageCard namespace={namespace} name={name} detail={detail} onRefresh={onRefresh} />
+
+        {/* Storage Class */}
+        <StorageClassCard namespace={namespace} name={name} detail={detail} onRefresh={onRefresh} />
+
+        {/* Service Type */}
+        <ServiceTypeCard namespace={namespace} name={name} detail={detail} onRefresh={onRefresh} />
+
+        <MetaCard label="Age" value={detail.age} icon={Clock} accent="#8b949e" />
       </div>
 
       {/* Resources */}
