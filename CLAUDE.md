@@ -55,6 +55,29 @@ make install-minio          # Install MinIO (needed for backup integration tests
 make install-azurite        # Install Azure Blob storage emulator
 ```
 
+### UI (Management Dashboard)
+
+The `ui/` directory contains a React + Vite frontend with an Express backend for managing MariaDB instances via the operator.
+
+**Prerequisites:** Node.js ≥ 18, a running KIND cluster (`make cluster`), and the operator installed (`make install`).
+
+```bash
+make ui-install             # Install npm dependencies (run once after cloning)
+make ui-dev                 # Start both API server (port 3001) and Vite dev server (port 5173)
+make ui-stop                # Stop the background API server
+```
+
+Or use the bundled script directly:
+```bash
+cd ui && ./start.sh         # Equivalent to make ui-dev
+```
+
+Open `http://localhost:5173` in your browser.
+
+**API server logs** are written to `/tmp/mariadb-ui-server.log`.
+
+The backend calls `kubectl` and `helm` from the host machine, so the cluster must be reachable (`kubectl get nodes` works) before starting the UI.
+
 ## Contributing workflow
 
 ### Branch model
