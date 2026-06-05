@@ -80,9 +80,9 @@ function ErrorMsg({ msg }) {
   )
 }
 
-// ── replica editor ───────────────────────────────────────────────────────────
+// ── replica card ─────────────────────────────────────────────────────────────
 
-function ReplicaEditor({ namespace, name, replicas, onSaved }) {
+function ReplicaCard({ namespace, name, replicas, onSaved }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue]     = useState(replicas)
   const [saving, setSaving]   = useState(false)
@@ -106,37 +106,59 @@ function ReplicaEditor({ namespace, name, replicas, onSaved }) {
     finally     { setSaving(false) }
   }
 
-  if (!editing) return (
-    <button onClick={() => { setValue(replicas); setEditing(true) }}
-      className="flex items-center gap-1 group"
-      title="Edit replicas">
-      <span className="flex items-center gap-1" style={{ color: '#8b949e' }}>
-        <Server size={11} />{replicas} replicas
-      </span>
-      <Pencil size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: '#f97316' }} />
-    </button>
-  )
+  const cancel = () => { setValue(replicas); setEditing(false); setError(null) }
 
   return (
-    <div className="flex items-center gap-1.5">
-      <Server size={11} style={{ color: '#8b949e' }} />
-      <input type="number" value={value} onChange={e => setValue(e.target.value)} min={1} max={9}
-        className="w-12 px-2 py-0.5 rounded text-xs font-mono border outline-none text-center"
-        style={{ background: '#0d1117', borderColor: '#f97316', color: '#e6edf3' }}
-        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
-        autoFocus />
-      <span className="text-xs" style={{ color: '#8b949e' }}>replicas</span>
-      <button onClick={save} disabled={saving}
-        className="flex items-center justify-center w-5 h-5 rounded"
-        style={{ background: saving ? '#30363d' : '#f97316', color: 'white' }}>
-        {saving ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
-      </button>
-      <button onClick={() => { setEditing(false); setError(null) }}
-        className="flex items-center justify-center w-5 h-5 rounded"
-        style={{ background: '#30363d', color: '#8b949e' }}>
-        <X size={10} />
-      </button>
-      {error && <span className="text-xs" style={{ color: '#f85149' }}>{error}</span>}
+    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <div className="flex items-center gap-2 mb-3">
+        <Server size={13} color="#f97316" />
+        <span className="text-xs font-medium uppercase tracking-wider" style={{ color: '#8b949e' }}>Replicas</span>
+      </div>
+
+      {!editing ? (
+        <div className="flex items-end justify-between">
+          <span className="text-2xl font-bold" style={{ color: '#e6edf3' }}>{replicas}</span>
+          <button onClick={() => { setValue(replicas); setEditing(true) }}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors"
+            style={{ borderColor: '#30363d', color: '#8b949e' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#f97316'; e.currentTarget.style.color = '#f97316' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#8b949e' }}>
+            <Pencil size={11} />Edit
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <input type="number" value={value} onChange={e => setValue(e.target.value)} min={1} max={9}
+              className="w-20 px-3 py-2 rounded-lg text-lg font-bold font-mono border outline-none text-center"
+              style={{ background: '#0d1117', borderColor: '#f97316', color: '#e6edf3' }}
+              onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel() }}
+              autoFocus />
+            <div className="flex flex-col gap-1">
+              {[1,2,3,5].map(n => (
+                <button key={n} onClick={() => setValue(n)}
+                  className="text-xs px-2 py-0.5 rounded border"
+                  style={{ borderColor: value == n ? '#f97316' : '#30363d', color: value == n ? '#f97316' : '#8b949e', background: value == n ? 'rgba(249,115,22,0.1)' : 'transparent' }}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={cancel} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border flex-1 justify-center"
+              style={{ borderColor: '#30363d', color: '#8b949e' }}>
+              <X size={11} />Cancel
+            </button>
+            <button onClick={save} disabled={saving}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium flex-1 justify-center"
+              style={{ background: saving ? '#30363d' : 'linear-gradient(135deg,#f97316,#ea580c)', color: saving ? '#8b949e' : 'white', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+              {saving ? 'Saving…' : 'Apply'}
+            </button>
+          </div>
+          {error && <div className="text-xs" style={{ color: '#f85149' }}>{error}</div>}
+        </div>
+      )}
     </div>
   )
 }
@@ -321,12 +343,12 @@ function OverviewTab({ detail, namespace, name, onRefresh }) {
     <div className="space-y-6">
       {/* Meta cards */}
       <div className="grid grid-cols-3 gap-3">
-        <MetaCard label="Version"      value={detail.version}      icon={Database}  accent="#58a6ff" />
-        <MetaCard label="Replicas"     value={detail.replicas}     icon={Server}    accent="#f97316" />
-        <MetaCard label="Storage"      value={detail.storage}      icon={HardDrive} accent="#bc8cff" />
+        <MetaCard label="Version"       value={detail.version}      icon={Database}  accent="#58a6ff" />
+        <ReplicaCard namespace={namespace} name={name} replicas={detail.replicas} onSaved={onRefresh} />
+        <MetaCard label="Storage"       value={detail.storage}      icon={HardDrive} accent="#bc8cff" />
         <MetaCard label="Storage Class" value={detail.storageClass} icon={HardDrive} accent="#8b949e" />
-        <MetaCard label="Service Type" value={detail.serviceType}  icon={Network}   accent="#8b949e" />
-        <MetaCard label="Age"          value={detail.age}          icon={Clock}     accent="#8b949e" />
+        <MetaCard label="Service Type"  value={detail.serviceType}  icon={Network}   accent="#8b949e" />
+        <MetaCard label="Age"           value={detail.age}          icon={Clock}     accent="#8b949e" />
       </div>
 
       {/* Resources */}
@@ -750,7 +772,7 @@ export default function InstanceDetail({ instanceKey, setPage }) {
                 <div className="flex items-center gap-3 text-xs" style={{ color: '#8b949e' }}>
                   <span className="flex items-center gap-1"><Database size={11} />{detail.version}</span>
                   <span>·</span>
-                  <ReplicaEditor namespace={namespace} name={name} replicas={detail.replicas} onSaved={() => fetchDetail(true)} />
+                  <span className="flex items-center gap-1"><Server size={11} />{detail.replicas} replicas</span>
                   <span>·</span>
                   <span className="flex items-center gap-1"><Clock size={11} />{detail.age}</span>
                   <span>·</span>
