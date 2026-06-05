@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   ArrowLeft, RefreshCw, Database, Server, HardDrive, Clock,
   Shield, Activity, AlertCircle, Loader2, CheckCircle2,
-  XCircle, Zap, Network, Box, Copy, Check,
+  XCircle, Zap, Network, Box, Copy, Check, Pencil, X, Cpu, MemoryStick,
 } from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
@@ -80,6 +80,145 @@ function ErrorMsg({ msg }) {
   )
 }
 
+// ── resource presets ─────────────────────────────────────────────────────────
+
+const PRESETS = [
+  { label: 'Micro',  cpuRequest: '100m',  cpuLimit: '200m',  memRequest: '128Mi', memLimit: '256Mi' },
+  { label: 'Small',  cpuRequest: '250m',  cpuLimit: '500m',  memRequest: '256Mi', memLimit: '512Mi' },
+  { label: 'Medium', cpuRequest: '500m',  cpuLimit: '1000m', memRequest: '512Mi', memLimit: '1Gi'   },
+  { label: 'Large',  cpuRequest: '1000m', cpuLimit: '2000m', memRequest: '1Gi',   memLimit: '2Gi'   },
+]
+
+function ResourcesCard({ namespace, name, resources, replicas, onSaved }) {
+  const [editing, setEditing]   = useState(false)
+  const [form, setForm]         = useState(resources)
+  const [saving, setSaving]     = useState(false)
+  const [result, setResult]     = useState(null)
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const applyPreset = p => setForm({ cpuRequest: p.cpuRequest, cpuLimit: p.cpuLimit, memRequest: p.memRequest, memLimit: p.memLimit })
+
+  const save = async () => {
+    setSaving(true); setResult(null)
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${name}/resources`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setResult({ ok: true })
+      setEditing(false)
+      onSaved()
+    } catch (e) {
+      setResult({ ok: false, error: e.message })
+    } finally {
+      setSaving(false) }
+  }
+
+  const cancel = () => { setForm(resources); setEditing(false); setResult(null) }
+
+  const Row = ({ label, reqKey, limKey }) => (
+    <div className="grid grid-cols-3 items-center gap-3 py-2 border-b last:border-0" style={{ borderColor: '#21262d' }}>
+      <span className="text-sm" style={{ color: '#8b949e' }}>{label}</span>
+      {editing ? (
+        <>
+          <input value={form[reqKey]} onChange={e => set(reqKey, e.target.value)} placeholder="e.g. 250m"
+            className="px-2 py-1.5 rounded-lg text-xs font-mono border outline-none"
+            style={{ background: '#0d1117', borderColor: '#30363d', color: '#e6edf3' }}
+            onFocus={e => e.target.style.borderColor = '#f97316'}
+            onBlur={e => e.target.style.borderColor = '#30363d'} />
+          <input value={form[limKey]} onChange={e => set(limKey, e.target.value)} placeholder="e.g. 500m"
+            className="px-2 py-1.5 rounded-lg text-xs font-mono border outline-none"
+            style={{ background: '#0d1117', borderColor: '#30363d', color: '#e6edf3' }}
+            onFocus={e => e.target.style.borderColor = '#f97316'}
+            onBlur={e => e.target.style.borderColor = '#30363d'} />
+        </>
+      ) : (
+        <>
+          <span className="text-xs font-mono" style={{ color: form[reqKey] ? '#e6edf3' : '#484f58' }}>{form[reqKey] || '—'}</span>
+          <span className="text-xs font-mono" style={{ color: form[limKey] ? '#e6edf3' : '#484f58' }}>{form[limKey] || '—'}</span>
+        </>
+      )}
+    </div>
+  )
+
+  return (
+    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <div className="flex items-center justify-between mb-4">
+        <SectionHeader icon={Cpu} title="Resources" />
+        {!editing ? (
+          <button onClick={() => { setForm(resources); setEditing(true) }}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors"
+            style={{ borderColor: '#30363d', color: '#8b949e' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#f97316'; e.currentTarget.style.color = '#f97316' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#8b949e' }}>
+            <Pencil size={11} />Edit
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button onClick={cancel} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border"
+              style={{ borderColor: '#30363d', color: '#8b949e' }}>
+              <X size={11} />Cancel
+            </button>
+            <button onClick={save} disabled={saving}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium"
+              style={{ background: saving ? '#30363d' : 'linear-gradient(135deg,#f97316,#ea580c)', color: saving ? '#8b949e' : 'white', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+              {saving ? 'Saving…' : 'Apply'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Presets (only in edit mode) */}
+      {editing && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <span className="text-xs" style={{ color: '#8b949e' }}>Presets:</span>
+          {PRESETS.map(p => (
+            <button key={p.label} onClick={() => applyPreset(p)}
+              className="text-xs px-2.5 py-1 rounded-lg border transition-colors"
+              style={{ borderColor: '#30363d', color: '#8b949e' }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#f97316'; e.currentTarget.style.color = '#f97316' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#8b949e' }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Column headers */}
+      <div className="grid grid-cols-3 gap-3 mb-1">
+        <div />
+        <div className="text-xs font-medium" style={{ color: '#8b949e' }}>Request</div>
+        <div className="text-xs font-medium" style={{ color: '#8b949e' }}>Limit</div>
+      </div>
+
+      <Row label="CPU"    reqKey="cpuRequest" limKey="cpuLimit" />
+      <Row label="Memory" reqKey="memRequest" limKey="memLimit" />
+
+      {/* Total (request × replicas) */}
+      {!editing && (form.cpuRequest || form.memRequest) && (
+        <div className="mt-3 pt-3 border-t flex gap-4" style={{ borderColor: '#21262d' }}>
+          <span className="text-xs" style={{ color: '#8b949e' }}>Cluster total ({replicas} replicas):</span>
+          {form.cpuRequest && <span className="text-xs font-mono" style={{ color: '#f97316' }}>{form.cpuRequest} × {replicas} CPU req</span>}
+          {form.memRequest && <span className="text-xs font-mono" style={{ color: '#bc8cff' }}>{form.memRequest} × {replicas} mem req</span>}
+        </div>
+      )}
+
+      {/* Result banner */}
+      {result && !result.ok && (
+        <div className="mt-3 flex items-center gap-2 p-2 rounded-lg text-xs"
+          style={{ background: 'rgba(248,81,73,0.1)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
+          <AlertCircle size={12} />{result.error}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── tab bar ───────────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -114,7 +253,7 @@ function TabBar({ active, setActive, type }) {
 
 // ── tab panels ────────────────────────────────────────────────────────────────
 
-function OverviewTab({ detail }) {
+function OverviewTab({ detail, namespace, name, onRefresh }) {
   const conditionColor = s => s === 'True' ? '#3fb950' : '#f85149'
 
   return (
@@ -128,6 +267,10 @@ function OverviewTab({ detail }) {
         <MetaCard label="Service Type" value={detail.serviceType}  icon={Network}   accent="#8b949e" />
         <MetaCard label="Age"          value={detail.age}          icon={Clock}     accent="#8b949e" />
       </div>
+
+      {/* Resources */}
+      <ResourcesCard namespace={namespace} name={name}
+        resources={detail.resources} replicas={detail.replicas} onSaved={onRefresh} />
 
       {/* Features */}
       <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
@@ -572,7 +715,7 @@ export default function InstanceDetail({ instanceKey, setPage }) {
           <TabBar active={tab} setActive={setTab} type={detail.type} />
 
           {/* Tab content */}
-          {tab === 'overview'    && <OverviewTab detail={detail} />}
+          {tab === 'overview'    && <OverviewTab detail={detail} namespace={namespace} name={name} onRefresh={() => fetchDetail(true)} />}
           {tab === 'pods'        && <PodsTab namespace={namespace} name={name} primary={detail.primary} />}
           {tab === 'replication' && <ReplicationTab detail={detail} />}
           {tab === 'services'    && <ServicesTab namespace={namespace} name={name} />}

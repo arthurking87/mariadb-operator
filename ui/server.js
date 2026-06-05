@@ -277,6 +277,12 @@ app.get('/api/instances/:namespace/:name', async (req, res) => {
       metricsEnabled: spec.metrics?.enabled ?? false,
       autoFailover: spec.replication?.primary?.autoFailover ?? false,
       semiSync: spec.replication?.semiSyncEnabled ?? false,
+      resources: {
+        cpuRequest: spec.resources?.requests?.cpu    ?? '',
+        cpuLimit:   spec.resources?.limits?.cpu      ?? '',
+        memRequest: spec.resources?.requests?.memory ?? '',
+        memLimit:   spec.resources?.limits?.memory   ?? '',
+      },
     })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -371,6 +377,33 @@ app.get('/api/instances/:namespace/:name/events', async (req, res) => {
         lastTime: e.lastTimestamp,
       }))
     res.json({ events })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Patch resources (cpu/memory) for an instance
+app.patch('/api/instances/:namespace/:name/resources', async (req, res) => {
+  const { namespace, name } = req.params
+  const { cpuRequest, cpuLimit, memRequest, memLimit } = req.body
+  const patch = {
+    spec: {
+      resources: {
+        requests: { cpu: cpuRequest || undefined, memory: memRequest || undefined },
+        limits:   { cpu: cpuLimit   || undefined, memory: memLimit   || undefined },
+      },
+    },
+  }
+  // remove undefined keys
+  if (!patch.spec.resources.requests.cpu)    delete patch.spec.resources.requests.cpu
+  if (!patch.spec.resources.requests.memory) delete patch.spec.resources.requests.memory
+  if (!patch.spec.resources.limits.cpu)      delete patch.spec.resources.limits.cpu
+  if (!patch.spec.resources.limits.memory)   delete patch.spec.resources.limits.memory
+  try {
+    await execAsync(
+      `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify(patch)}'`
+    )
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
