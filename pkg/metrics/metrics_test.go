@@ -25,6 +25,7 @@ func newIsolatedRegistry(t *testing.T) *prometheus.Registry {
 		SwitchoverLastDuration,
 		SwitchoverPhaseDuration,
 		SwitchoverPhaseLastDuration,
+		SwitchoverTotal,
 	)
 	return reg
 }
@@ -97,6 +98,11 @@ func TestMetricDescriptors(t *testing.T) {
 			collector:  SwitchoverPhaseLastDuration,
 			wantLabels: []string{"namespace", "mariadb", "phase"},
 		},
+		{
+			name:       "SwitchoverTotal",
+			collector:  SwitchoverTotal,
+			wantLabels: []string{"namespace", "mariadb", "from", "to", "result"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,6 +127,7 @@ func TestSwitchoverMetricsRegistered(t *testing.T) {
 		func() { SwitchoverLastDuration.WithLabelValues("ns", "mdb") },
 		func() { SwitchoverPhaseDuration.WithLabelValues("ns", "mdb", "phase", labelSuccess) },
 		func() { SwitchoverPhaseLastDuration.WithLabelValues("ns", "mdb", "phase") },
+		func() { SwitchoverTotal.WithLabelValues("ns", "mdb", "0", "1", labelSuccess) },
 	}
 	for _, fn := range collectors {
 		func() {
@@ -289,5 +296,34 @@ func TestSwitchoverMetrics_MultipleInstances_IndependentSeries(t *testing.T) {
 	}
 	if seriesCount != 2 {
 		t.Errorf("want 2 independent series, got %d", seriesCount)
+	}
+}
+
+func TestSwitchoverTotal_CountsByTransitionPath(t *testing.T) {
+	counter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "test_switchover_total_transition",
+	}, []string{"namespace", "mariadb", "from", "to", "result"})
+
+	const ns, mdb = "default", "mariadb-test"
+
+	// Same path, multiple switchovers.
+	counter.WithLabelValues(ns, mdb, "0", "1", labelSuccess).Inc()
+	counter.WithLabelValues(ns, mdb, "0", "1", labelSuccess).Inc()
+	// Different path.
+	counter.WithLabelValues(ns, mdb, "1", "2", labelSuccess).Inc()
+	// Failure on same path.
+	counter.WithLabelValues(ns, mdb, "0", "1", labelFailure).Inc()
+
+	got := testutil.ToFloat64(counter.WithLabelValues(ns, mdb, "0", "1", labelSuccess))
+	if got != 2 {
+		t.Errorf("0→1 success: want 2, got %v", got)
+	}
+	got = testutil.ToFloat64(counter.WithLabelValues(ns, mdb, "1", "2", labelSuccess))
+	if got != 1 {
+		t.Errorf("1→2 success: want 1, got %v", got)
+	}
+	got = testutil.ToFloat64(counter.WithLabelValues(ns, mdb, "0", "1", labelFailure))
+	if got != 1 {
+		t.Errorf("0→1 failure: want 1, got %v", got)
 	}
 }

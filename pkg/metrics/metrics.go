@@ -49,6 +49,18 @@ var (
 		},
 		[]string{"namespace", "mariadb", "phase"},
 	)
+
+	// SwitchoverTotal counts completed switchovers by transition path.
+	// from/to labels identify which pod index was primary before and after,
+	// enabling per-path frequency analysis without polluting the timing histograms
+	// with high-cardinality labels.
+	SwitchoverTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mariadb_operator_switchover_total",
+			Help: "Total number of MariaDB primary switchovers by transition path.",
+		},
+		[]string{"namespace", "mariadb", "from", "to", "result"},
+	)
 )
 
 func init() {
@@ -57,5 +69,6 @@ func init() {
 		SwitchoverLastDuration,
 		SwitchoverPhaseDuration,
 		SwitchoverPhaseLastDuration,
+		SwitchoverTotal,
 	)
 }
