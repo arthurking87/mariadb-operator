@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,12 +106,16 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	ns := req.mariadb.Namespace
 	mdbName := req.mariadb.Name
 
+	fromIndex := strconv.Itoa(int(*primary))
+	toIndex := strconv.Itoa(int(newPrimary))
+
 	switchoverStart := time.Now()
 	result := metricResultSuccess
 	defer func() {
 		duration := time.Since(switchoverStart).Seconds()
 		metrics.SwitchoverDuration.WithLabelValues(ns, mdbName, result).Observe(duration)
 		metrics.SwitchoverLastDuration.WithLabelValues(ns, mdbName).Set(duration)
+		metrics.SwitchoverTotal.WithLabelValues(ns, mdbName, fromIndex, toIndex, result).Inc()
 	}()
 
 	for _, p := range phases {
