@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metrics"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
@@ -19,6 +21,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+)
+
+const (
+	metricResultSuccess = "success"
+	metricResultFailure = "failure"
 )
 
 type switchoverPhase struct {
@@ -95,12 +102,35 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		},
 	}
 
+	ns := req.mariadb.Namespace
+	mdbName := req.mariadb.Name
+
+	switchoverStart := time.Now()
+	result := metricResultSuccess
+	defer func() {
+		duration := time.Since(switchoverStart).Seconds()
+		metrics.SwitchoverDuration.WithLabelValues(ns, mdbName, result).Observe(duration)
+		metrics.SwitchoverLastDuration.WithLabelValues(ns, mdbName).Set(duration)
+	}()
+
 	for _, p := range phases {
-		if err := p.reconcile(ctx, req, logger.WithValues("phase", p.name)); err != nil {
-			if apierrors.IsNotFound(err) {
-				return err
+		phaseStart := time.Now()
+		phaseErr := p.reconcile(ctx, req, logger.WithValues("phase", p.name))
+		phaseDuration := time.Since(phaseStart).Seconds()
+		phaseResult := metricResultSuccess
+		if phaseErr != nil {
+			phaseResult = metricResultFailure
+		}
+		phaseLabel := strings.ToLower(strings.ReplaceAll(p.name, " ", "_"))
+		metrics.SwitchoverPhaseDuration.WithLabelValues(ns, mdbName, phaseLabel, phaseResult).Observe(phaseDuration)
+		metrics.SwitchoverPhaseLastDuration.WithLabelValues(ns, mdbName, phaseLabel).Set(phaseDuration)
+
+		if phaseErr != nil {
+			result = metricResultFailure
+			if apierrors.IsNotFound(phaseErr) {
+				return phaseErr
 			}
-			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, err)
+			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, phaseErr)
 		}
 	}
 
@@ -108,6 +138,7 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		status.UpdateCurrentPrimary(req.mariadb, newPrimary)
 		condition.SetPrimarySwitched(&req.mariadb.Status)
 	}); err != nil {
+		result = metricResultFailure
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
 
