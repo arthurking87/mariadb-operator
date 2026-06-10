@@ -154,8 +154,17 @@ func NewClientWithMariaDB(ctx context.Context, mariadb interfaces.MariaDBObject,
 	if mariadb.GetSUCredential() == nil {
 		return nil, fmt.Errorf("error: superuser credential is nil")
 	}
-	password, err := refResolver.SecretKeyRef(ctx, *mariadb.GetSUCredential(), mariadb.GetNamespace())
+	if mariadb.GetSUName() == "" {
+		return nil, fmt.Errorf("error: superuser name is empty")
+	}
+	if mariadb.GetHost() == "" {
+		return nil, fmt.Errorf("error: host is empty")
+	}
+	if mariadb.GetPort() == 0 {
+		return nil, fmt.Errorf("error: port is 0")
+	}
 	var opts []Opt
+	password, err := refResolver.SecretKeyRef(ctx, *mariadb.GetSUCredential(), mariadb.GetNamespace())
 	if err != nil {
 		return nil, fmt.Errorf("error reading root password secret: %v", err)
 	}
