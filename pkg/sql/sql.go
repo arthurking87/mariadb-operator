@@ -388,6 +388,9 @@ func (c Client) Exists(ctx context.Context, sql string, args ...any) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	if rows == nil {
+		return false, nil
+	}
 	defer rows.Close()
 	return rows.Next(), nil
 }
@@ -397,6 +400,9 @@ func (c Client) QueryColumnMaps(ctx context.Context, sql string) ([]map[string]s
 	rows, err := c.db.QueryContext(ctx, sql)
 	if err != nil {
 		return nil, err
+	}
+	if rows == nil {
+		return nil, nil
 	}
 	defer rows.Close()
 
