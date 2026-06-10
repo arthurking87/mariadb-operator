@@ -146,10 +146,11 @@ func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sq
 			// replication domain 0. This conflicts with the binary log which contains GTID
 			// 0-11-1176. If MASTER_GTID_POS=CURRENT_POS is used, the binlog position will
 			// override the new value of @@gtid_slave_pos'
-			if sql.IsGtidSlavePosNoValueForDomain(err) {
-				return nil
+			if !sql.IsGtidSlavePosNoValueForDomain(err) {
+				return fmt.Errorf("error resetting slave position: %v", err)
 			}
-			return fmt.Errorf("error resetting slave position: %v", err)
+			// Fall through to DisableReadOnly: skipping GTID slave pos reset must not leave
+			// the promoted primary stuck in READ_ONLY=ON.
 		}
 	}
 	if err := client.DisableReadOnly(ctx); err != nil {
