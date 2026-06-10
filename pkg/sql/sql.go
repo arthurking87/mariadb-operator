@@ -669,8 +669,7 @@ type DatabaseOpts struct {
 }
 
 func (c *Client) CreateDatabase(ctx context.Context, database string, opts DatabaseOpts) error {
-	sql := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '%s')", database)
-	row := c.db.QueryRowContext(ctx, sql)
+	row := c.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?)", database)
 	var dbExists string
 	if err := row.Scan(&dbExists); err != nil {
 		return err
@@ -784,8 +783,7 @@ func (c *Client) ResetSlave(ctx context.Context, replOpts ...ReplicationOpt) err
 }
 
 func (c *Client) WaitForReplicaGtid(ctx context.Context, gtid string, timeout time.Duration) error {
-	sql := fmt.Sprintf("SELECT MASTER_GTID_WAIT('%s', %d);", gtid, int(timeout.Seconds()))
-	row := c.db.QueryRowContext(ctx, sql)
+	row := c.db.QueryRowContext(ctx, "SELECT MASTER_GTID_WAIT(?, ?);", gtid, int(timeout.Seconds()))
 
 	var result int
 	if err := row.Scan(&result); err != nil {
@@ -850,7 +848,7 @@ func (c *Client) SetBinlogState(ctx context.Context, binlogState string) error {
 	if binlogState == "" {
 		return errors.New("gtid_binlog_state must not be empty")
 	}
-	return c.Exec(ctx, fmt.Sprintf("SET @@global.gtid_binlog_state='%s';", binlogState))
+	return c.Exec(ctx, "SET @@global.gtid_binlog_state=?;", binlogState)
 }
 
 func (c *Client) ResetBinlogState(ctx context.Context, binlogState string) error {
@@ -871,7 +869,7 @@ func (c *Client) SetGtidSlavePos(ctx context.Context, gtid string) error {
 	if gtid == "" {
 		return errors.New("gtid must not be empty")
 	}
-	return c.Exec(ctx, fmt.Sprintf("SET @@global.gtid_slave_pos='%s';", gtid))
+	return c.Exec(ctx, "SET @@global.gtid_slave_pos=?;", gtid)
 }
 
 func (c *Client) ResetGtidSlavePos(ctx context.Context) error {
