@@ -135,7 +135,7 @@ func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sq
 		if err := client.StopSlave(ctx); err != nil {
 			return fmt.Errorf("error stopping slaves: %v", err)
 		}
-		if err := client.ResetSlave(ctx); err != nil {
+		if err := client.ResetSlave(ctx, sql.WithConnectionName("")); err != nil {
 			return fmt.Errorf("error resetting slave: %v", err)
 		}
 		if err := client.ResetGtidSlavePos(ctx); err != nil {
@@ -334,7 +334,7 @@ func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, clie
 		return fmt.Errorf("error stopping all slaves: %v", err)
 	}
 	// reset local replica
-	if err := client.ResetSlave(ctx); err != nil {
+	if err := client.ResetSlave(ctx, sql.WithConnectionName("")); err != nil {
 		return fmt.Errorf("error resetting local slave: %v", err)
 	}
 
@@ -416,7 +416,7 @@ func (m *multiClusterTopology) configureSecondaryReplica(ctx context.Context, cl
 	); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error resetting remote replica: %v", err)
 	}
-	if err := client.ResetSlave(ctx); err != nil {
+	if err := client.ResetSlave(ctx, sql.WithConnectionName("")); err != nil {
 		return fmt.Errorf("error resetting local replica: %v", err)
 	}
 
