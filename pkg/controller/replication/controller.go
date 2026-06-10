@@ -112,6 +112,7 @@ func (r *ReplicationReconciler) NewReconcileRequest(ctx context.Context, mdb *ma
 	if err != nil {
 		return nil, fmt.Errorf("error creating mariadb clientset: %v", err)
 	}
+	defer replClientSet.close()
 	agentClientSet, err := agentclient.NewClientSet(ctx, mdb, r.env, r.refResolver)
 	if err != nil {
 		return nil, fmt.Errorf("error getting agent clientset: %v", err)
