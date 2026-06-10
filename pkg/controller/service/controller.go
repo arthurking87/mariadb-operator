@@ -22,7 +22,8 @@ func NewServiceReconciler(client client.Client) *ServiceReconciler {
 func (r *ServiceReconciler) Reconcile(ctx context.Context, desiredSvc *corev1.Service) error {
 	key := client.ObjectKeyFromObject(desiredSvc)
 	var existingSvc corev1.Service
-	if err := r.Get(ctx, key, &existingSvc); err != nil {
+	err := r.Get(ctx, key, &existingSvc)
+	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("error getting Service: %v", err)
 		}
@@ -32,27 +33,31 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, desiredSvc *corev1.Se
 		return nil
 	}
 
-	patch := client.MergeFrom(existingSvc.DeepCopy())
-	updateServicePorts(&existingSvc, desiredSvc)
-	existingSvc.Spec.AllocateLoadBalancerNodePorts = desiredSvc.Spec.AllocateLoadBalancerNodePorts
-	existingSvc.Spec.LoadBalancerClass = desiredSvc.Spec.LoadBalancerClass
-	existingSvc.Spec.Selector = desiredSvc.Spec.Selector
-	existingSvc.Spec.Type = desiredSvc.Spec.Type
+	if err == nil {
+		patch := client.MergeFrom(existingSvc.DeepCopy())
+		updateServicePorts(&existingSvc, desiredSvc)
+		existingSvc.Spec.AllocateLoadBalancerNodePorts = desiredSvc.Spec.AllocateLoadBalancerNodePorts
+		existingSvc.Spec.LoadBalancerClass = desiredSvc.Spec.LoadBalancerClass
+		existingSvc.Spec.Selector = desiredSvc.Spec.Selector
+		existingSvc.Spec.Type = desiredSvc.Spec.Type
 
-	if existingSvc.Annotations == nil {
-		existingSvc.Annotations = make(map[string]string)
-	}
-	for k, v := range desiredSvc.Annotations {
-		existingSvc.Annotations[k] = v
-	}
-	if existingSvc.Labels == nil {
-		existingSvc.Labels = make(map[string]string)
-	}
-	for k, v := range desiredSvc.Labels {
-		existingSvc.Labels[k] = v
+		if existingSvc.Annotations == nil {
+			existingSvc.Annotations = make(map[string]string)
+		}
+		for k, v := range desiredSvc.Annotations {
+			existingSvc.Annotations[k] = v
+		}
+		if existingSvc.Labels == nil {
+			existingSvc.Labels = make(map[string]string)
+		}
+		for k, v := range desiredSvc.Labels {
+			existingSvc.Labels[k] = v
+		}
+
+		return r.Patch(ctx, &existingSvc, patch)
 	}
 
-	return r.Patch(ctx, &existingSvc, patch)
+	return nil
 }
 
 // updateServicePorts updates the ports of an existing service based on desired service ports.
