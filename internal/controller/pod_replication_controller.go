@@ -116,8 +116,15 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting new primary Pod index: %v", err)
 	}
 
+	if newPrimary == nil {
+		return fmt.Errorf("error getting new primary Pod index: nil index returned for pod '%s'", newPrimaryName)
+	}
+
 	var errBundle *multierror.Error
 	err = r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
+		if mdb.Spec.Replication == nil {
+			return
+		}
 		mdb.Spec.Replication.Primary.PodIndex = newPrimary
 	})
 	errBundle = multierror.Append(errBundle, err)
