@@ -179,7 +179,7 @@ func (r *singleClusterTopology) ConfigureReplica(ctx context.Context, client *sq
 			return fmt.Errorf("error resetting master: %v", err)
 		}
 	}
-	if err := client.StopSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
+	if err := client.StopSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error stopping slaves: %v", err)
 	}
 	if opts.GtidSlavePos != nil {
@@ -419,7 +419,7 @@ func (m *multiClusterTopology) configureSecondaryReplica(ctx context.Context, cl
 	); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error resetting remote replica: %v", err)
 	}
-	if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
+	if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error resetting local replica: %v", err)
 	}
 
