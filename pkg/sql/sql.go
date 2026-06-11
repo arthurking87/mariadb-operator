@@ -664,11 +664,11 @@ func escapeWildcard(s string) string {
 	return fmt.Sprintf("`%s`", s)
 }
 
-var reValidIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_$]+$`)
+var reValidIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_$-]+$`)
 
 func validateIdentifier(s, label string) error {
 	if !reValidIdentifier.MatchString(s) {
-		return fmt.Errorf("invalid %s %q: only letters, digits, underscores, and dollar signs are allowed", label, s)
+		return fmt.Errorf("invalid %s %q: only letters, digits, underscores, dollar signs, and hyphens are allowed", label, s)
 	}
 	return nil
 }

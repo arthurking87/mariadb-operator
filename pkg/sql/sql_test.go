@@ -23,7 +23,8 @@ func TestValidateIdentifier(t *testing.T) {
 		{name: "backtick injection", input: "db`; DROP DATABASE prod; --", wantErr: true},
 		{name: "single quote", input: "db'injection", wantErr: true},
 		{name: "semicolon", input: "db;evil", wantErr: true},
-		{name: "hyphen", input: "my-db", wantErr: true},
+		{name: "hyphen", input: "my-db", wantErr: false},
+		{name: "kubernetes-style name", input: "database-create-test", wantErr: false},
 		{name: "space", input: "my db", wantErr: true},
 		{name: "slash", input: "db/evil", wantErr: true},
 	}
