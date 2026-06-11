@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -663,12 +664,35 @@ func escapeWildcard(s string) string {
 	return fmt.Sprintf("`%s`", s)
 }
 
+var reValidIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_$]+$`)
+
+func validateIdentifier(s, label string) error {
+	if !reValidIdentifier.MatchString(s) {
+		return fmt.Errorf("invalid %s %q: only letters, digits, underscores, and dollar signs are allowed", label, s)
+	}
+	return nil
+}
+
 type DatabaseOpts struct {
 	CharacterSet string
 	Collate      string
 }
 
 func (c *Client) CreateDatabase(ctx context.Context, database string, opts DatabaseOpts) error {
+	if err := validateIdentifier(database, "database name"); err != nil {
+		return err
+	}
+	if opts.CharacterSet != "" {
+		if err := validateIdentifier(opts.CharacterSet, "character set"); err != nil {
+			return err
+		}
+	}
+	if opts.Collate != "" {
+		if err := validateIdentifier(opts.Collate, "collation"); err != nil {
+			return err
+		}
+	}
+
 	row := c.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?)", database)
 	var dbExists string
 	if err := row.Scan(&dbExists); err != nil {
