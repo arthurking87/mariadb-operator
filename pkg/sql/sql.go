@@ -714,6 +714,9 @@ func (c *Client) CreateDatabase(ctx context.Context, database string, opts Datab
 }
 
 func (c *Client) DropDatabase(ctx context.Context, database string) error {
+	if err := validateIdentifier(database, "database name"); err != nil {
+		return err
+	}
 	return c.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", database))
 }
 

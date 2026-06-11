@@ -8,6 +8,39 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+func TestValidateIdentifier(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "simple name", input: "mydb", wantErr: false},
+		{name: "with underscore", input: "my_database", wantErr: false},
+		{name: "with dollar sign", input: "app$db", wantErr: false},
+		{name: "with numbers", input: "db123", wantErr: false},
+		{name: "mixed case", input: "MyDatabase_1", wantErr: false},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "backtick injection", input: "db`; DROP DATABASE prod; --", wantErr: true},
+		{name: "single quote", input: "db'injection", wantErr: true},
+		{name: "semicolon", input: "db;evil", wantErr: true},
+		{name: "hyphen", input: "my-db", wantErr: true},
+		{name: "space", input: "my db", wantErr: true},
+		{name: "slash", input: "db/evil", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIdentifier(tt.input, "database name")
+			if tt.wantErr && err == nil {
+				t.Error("expected error but got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildChangeMasterQuery(t *testing.T) {
 	tests := []struct {
 		name      string
