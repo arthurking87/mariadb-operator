@@ -58,7 +58,7 @@ func (p *ReplicationProbe) Liveness(w http.ResponseWriter, r *http.Request) {
 	defer sqlClient.Close()
 
 	isReplica, err := sqlClient.IsReplicationReplica(sqlCtx, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
-	if err != nil {
+	if err != nil && !sql.IsConnectionNotExists(err) {
 		p.livenessLogger.Error(err, "error checking replica")
 		p.responseWriter.WriteErrorf(w, "error checking replica: %v", err)
 		return
@@ -126,7 +126,7 @@ func (p *ReplicationProbe) Readiness(w http.ResponseWriter, r *http.Request) {
 	defer sqlClient.Close()
 
 	isReplica, err := sqlClient.IsReplicationReplica(sqlCtx, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
-	if err != nil {
+	if err != nil && !sql.IsConnectionNotExists(err) {
 		p.readinessLogger.Error(err, "error checking replica")
 		p.responseWriter.WriteErrorf(w, "error checking replica: %v", err)
 		return

@@ -150,7 +150,9 @@ func (r *MariaDBReconciler) getReplicationRole(ctx context.Context, mdb *mariadb
 		aggErr = multierror.Append(aggErr, err)
 	}
 	isReplica, err = client.IsReplicationReplica(ctx, sql.WithConnectionName(replication.ReplicaConnectionName))
-	aggErr = multierror.Append(aggErr, err)
+	if err != nil && !sql.IsConnectionNotExists(err) {
+		aggErr = multierror.Append(aggErr, err)
+	}
 	isPrimary, err = client.HasConnectedReplicas(ctx)
 	aggErr = multierror.Append(aggErr, err)
 

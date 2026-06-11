@@ -130,7 +130,7 @@ func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sq
 	r.logger.Info("Configuring primary")
 
 	isReplica, err := client.IsReplicationReplica(ctx, sql.WithConnectionName(ReplicaConnectionName))
-	if err != nil {
+	if err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error checking replica: %v", err)
 	}
 	if isReplica {
