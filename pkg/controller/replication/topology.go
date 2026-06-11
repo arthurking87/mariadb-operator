@@ -17,6 +17,7 @@ import (
 )
 
 var (
+	ReplicaConnectionName             = "mariadb-operator"
 	MultiClusterReplicaConnectionName = "multi-cluster"
 	errTopologyNotSupported           = errors.New("topology not supported")
 )
@@ -132,10 +133,10 @@ func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sq
 		return fmt.Errorf("error checking replica: %v", err)
 	}
 	if isReplica {
-		if err := client.StopSlave(ctx); err != nil {
+		if err := client.StopSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 			return fmt.Errorf("error stopping slaves: %v", err)
 		}
-		if err := client.ResetSlave(ctx, sql.WithConnectionName("")); err != nil {
+		if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 			return fmt.Errorf("error resetting slave: %v", err)
 		}
 		if err := client.ResetGtidSlavePos(ctx); err != nil {
@@ -177,7 +178,7 @@ func (r *singleClusterTopology) ConfigureReplica(ctx context.Context, client *sq
 			return fmt.Errorf("error resetting master: %v", err)
 		}
 	}
-	if err := client.StopSlave(ctx); err != nil {
+	if err := client.StopSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error stopping slaves: %v", err)
 	}
 	if opts.GtidSlavePos != nil {
@@ -195,7 +196,7 @@ func (r *singleClusterTopology) ConfigureReplica(ctx context.Context, client *sq
 	if err := r.changeMaster(ctx, r.mariadb, client, primaryPodIndex, opts.ChangeMasterOpts...); err != nil {
 		return fmt.Errorf("error changing master: %v", err)
 	}
-	if err := client.StartSlave(ctx); err != nil {
+	if err := client.StartSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error starting slave: %v", err)
 	}
 	return nil
@@ -222,6 +223,7 @@ func (r *singleClusterTopology) changeMaster(ctx context.Context, mariadb *maria
 	}
 
 	changeMasterOpts := []sql.ChangeMasterOpt{
+		sql.WithChangeMasterConnectionName(ReplicaConnectionName),
 		sql.WithChangeMasterHost(
 			statefulset.PodFQDNWithService(
 				mariadb.ObjectMeta,
@@ -334,7 +336,7 @@ func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, clie
 		return fmt.Errorf("error stopping all slaves: %v", err)
 	}
 	// reset local replica
-	if err := client.ResetSlave(ctx, sql.WithConnectionName("")); err != nil {
+	if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error resetting local slave: %v", err)
 	}
 
@@ -416,7 +418,7 @@ func (m *multiClusterTopology) configureSecondaryReplica(ctx context.Context, cl
 	); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error resetting remote replica: %v", err)
 	}
-	if err := client.ResetSlave(ctx, sql.WithConnectionName("")); err != nil {
+	if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error resetting local replica: %v", err)
 	}
 
@@ -435,7 +437,7 @@ func (m *multiClusterTopology) configureSecondaryReplica(ctx context.Context, cl
 	if err := m.singleCluster.changeMaster(ctx, m.mariadb, client, primaryPodIndex, opts.ChangeMasterOpts...); err != nil {
 		return fmt.Errorf("error changing master: %v", err)
 	}
-	if err := client.StartSlave(ctx); err != nil {
+	if err := client.StartSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error starting local replica: %v", err)
 	}
 	return nil
