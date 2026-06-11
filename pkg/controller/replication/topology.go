@@ -10,6 +10,7 @@ import (
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	builderpki "github.com/mariadb-operator/mariadb-operator/v26/pkg/builder/pki"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
+	mdbreplic "github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	"k8s.io/utils/ptr"
@@ -17,8 +18,8 @@ import (
 )
 
 var (
-	ReplicaConnectionName             = "mariadb-operator"
-	MultiClusterReplicaConnectionName = "multi-cluster"
+	ReplicaConnectionName             = mdbreplic.ReplicaConnectionName
+	MultiClusterReplicaConnectionName = mdbreplic.MultiClusterReplicaConnectionName
 	errTopologyNotSupported           = errors.New("topology not supported")
 )
 
@@ -128,7 +129,7 @@ func newSingleClusterTopology(mariadb *mariadbv1alpha1.MariaDB, userSqlReconcile
 func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sql.Client) error {
 	r.logger.Info("Configuring primary")
 
-	isReplica, err := client.IsReplicationReplica(ctx)
+	isReplica, err := client.IsReplicationReplica(ctx, sql.WithConnectionName(ReplicaConnectionName))
 	if err != nil {
 		return fmt.Errorf("error checking replica: %v", err)
 	}
