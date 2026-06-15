@@ -337,7 +337,7 @@ func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, clie
 		return fmt.Errorf("error stopping all slaves: %v", err)
 	}
 	// reset local replica
-	if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil {
+	if err := client.ResetSlave(ctx, sql.WithConnectionName(ReplicaConnectionName)); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error resetting local slave: %v", err)
 	}
 
