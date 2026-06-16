@@ -85,6 +85,11 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting Pod index: %v", err)
 	}
 	if *index != *mariadb.Status.CurrentPrimaryPodIndex {
+		// This pod is a replica. Ensure it is removed from the secondary-svc endpoint.
+		secondaryServiceKey := mariadb.SecondaryServiceKey()
+		if _, err := r.endpointsReconciler.Reconcile(ctx, secondaryServiceKey, mariadb, secondaryServiceKey.Name); err != nil {
+			return fmt.Errorf("error reconciling secondary service endpoints for replica pod '%s': %v", pod.Name, err)
+		}
 		return nil
 	}
 
