@@ -945,7 +945,7 @@ func testReplicationStatusBuilder(primaryKey, replicaKey types.NamespacedName,
 		By("Ensuring valid primary gtid_current_pos")
 		testGtidCurrentPos(*primaryClient, primaryGtidDomainId)
 		By("Ensuring primary replication running")
-		testReplicationRunning(*primaryClient, nil)
+		testReplicationRunning(*primaryClient, &replicationctrl.ReplicaConnectionName)
 
 		By("Getting primary replica MariaDB client")
 		Expect(k8sClient.Get(testCtx, replicaKey, &replicaMdb)).To(Succeed())
@@ -980,7 +980,7 @@ func testReplicationStatusBuilder(primaryKey, replicaKey types.NamespacedName,
 		By("Ensuring valid replica gtid_current_pos")
 		testGtidCurrentPos(*replicaClient, primaryGtidDomainId, replicaGtidDomainId)
 		By("Ensuring replica replication running")
-		testReplicationRunning(*replicaClient, nil)
+		testReplicationRunning(*replicaClient, &replicationctrl.ReplicaConnectionName)
 	}
 }
 
