@@ -15,6 +15,7 @@ import (
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/pvc"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/rbac"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/discovery"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
@@ -452,7 +453,7 @@ func sortPods(pods []corev1.Pod) {
 }
 
 func isReplicationReady(ctx context.Context, client *sql.Client, logger logr.Logger) (bool, error) {
-	replStatus, err := client.ReplicaStatus(ctx, logger)
+	replStatus, err := client.ReplicaStatus(ctx, logger, sql.WithConnectionName(replication.ReplicaConnectionName))
 	if err != nil {
 		return false, fmt.Errorf("error getting replica status: %v", err)
 	}

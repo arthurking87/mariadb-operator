@@ -13,6 +13,7 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/command"
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
 	podobj "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	stsobj "github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/wait"
@@ -389,7 +390,7 @@ func (r *MariaDBReconciler) ensureReplicaRecovered(ctx context.Context, replica 
 		}
 		defer client.Close()
 
-		replStatus, err := client.ReplicaStatus(ctx, logger)
+		replStatus, err := client.ReplicaStatus(ctx, logger, sql.WithConnectionName(replication.ReplicaConnectionName))
 		if err != nil {
 			return fmt.Errorf("error getting replica status: %v", err)
 		}
