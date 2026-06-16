@@ -36,9 +36,6 @@ func NewPodReplicationController(client client.Client, recorder events.EventReco
 }
 
 func (r *PodReplicationController) ReconcilePodReady(ctx context.Context, pod corev1.Pod, mariadb *mariadbv1alpha1.MariaDB) error {
-	if !shouldReconcile(mariadb) {
-		return nil
-	}
 	logger := log.FromContext(ctx).WithName("pod-replication")
 	if mariadb.Status.CurrentPrimaryPodIndex == nil {
 		logger.V(1).Info("'status.currentPrimaryPodIndex' must be set. Skipping")
