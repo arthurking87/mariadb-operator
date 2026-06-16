@@ -87,7 +87,7 @@ func (f *FailoverHandler) findCandidates(ctx context.Context, pods []corev1.Pod)
 		}
 		defer sqlClient.Close()
 
-		status, err := sqlClient.ReplicaStatus(ctx, podLogger)
+		status, err := sqlClient.ReplicaStatus(ctx, podLogger, sql.WithConnectionName(ReplicaConnectionName))
 		if err != nil {
 			podLogger.Info("Unable to get replica status Skipping...", "err", err)
 			continue

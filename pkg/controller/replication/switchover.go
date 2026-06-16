@@ -269,7 +269,7 @@ func (r *ReplicationReconciler) waitForNewPrimarySync(ctx context.Context, req *
 	defer cancel()
 
 	if err := wait.PollUntilSuccessOrContextCancel(syncCtx, logger, func(ctx context.Context) error {
-		status, err := newPrimaryClient.ReplicaStatus(ctx, logger)
+		status, err := newPrimaryClient.ReplicaStatus(ctx, logger, sql.WithConnectionName(ReplicaConnectionName))
 		if err != nil {
 			return fmt.Errorf("error getting new primary status: %v", err)
 		}
