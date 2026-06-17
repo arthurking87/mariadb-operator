@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -68,6 +69,10 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
 
+	if elapsed, timedOut := r.switchoverTimedOut(req.mariadb, replication); timedOut {
+		return r.abortSwitchover(ctx, req, logger, elapsed)
+	}
+
 	phases := []switchoverPhase{
 		{
 			name:      "Lock primary with read lock",
@@ -114,6 +119,64 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	logger.Info("Primary switched")
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitched,
 		mariadbv1alpha1.ActionReconciling, "Primary switched from index '%d' to index '%d'", *primary, newPrimary)
+	return nil
+}
+
+// switchoverTimedOut returns the elapsed time since the switchover started and whether it
+// exceeds replication.Primary.SwitchoverTimeout. The start time is derived from the
+// ConditionTypePrimarySwitched condition, which is only set to False once, when the
+// switchover begins, and stays False across retries until it succeeds or is aborted.
+func (r *ReplicationReconciler) switchoverTimedOut(mdb *mariadbv1alpha1.MariaDB,
+	replication mariadbv1alpha1.Replication) (time.Duration, bool) {
+	cond := meta.FindStatusCondition(mdb.Status.Conditions, mariadbv1alpha1.ConditionTypePrimarySwitched)
+	if cond == nil {
+		return 0, false
+	}
+	timeout := ptr.Deref(replication.Primary.SwitchoverTimeout, metav1.Duration{Duration: 60 * time.Second}).Duration
+	if timeout <= 0 {
+		return 0, false
+	}
+	elapsed := time.Since(cond.LastTransitionTime.Time)
+	return elapsed, elapsed > timeout
+}
+
+// abortSwitchover gives up an in-progress switchover/failover that has exceeded its timeout.
+// It restores the primary to a writable state and reverts the desired primary back to the
+// current one, so that IsReplicationSwitchoverRequired() stops triggering retries.
+func (r *ReplicationReconciler) abortSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger,
+	elapsed time.Duration) error {
+	logger.Info("Switchover timed out, aborting", "elapsed", elapsed)
+
+	if req.currentPrimaryReady {
+		client, err := req.replClientSet.currentPrimaryClient(ctx)
+		if err != nil {
+			return fmt.Errorf("error getting current primary client: %v", err)
+		}
+		if err := client.UnlockTables(ctx); err != nil {
+			return fmt.Errorf("error unlocking primary: %v", err)
+		}
+		if err := client.DisableReadOnly(ctx); err != nil {
+			return fmt.Errorf("error disabling readonly in primary: %v", err)
+		}
+	}
+
+	if err := r.patch(ctx, req.mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
+		// Copy the value rather than aliasing the pointer: Spec and Status must not share the same *int.
+		mdb.Spec.Replication.Primary.PodIndex = ptr.To(*mdb.Status.CurrentPrimaryPodIndex)
+	}); err != nil {
+		return fmt.Errorf("error reverting desired primary: %v", err)
+	}
+
+	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		condition.SetPrimarySwitchoverTimeout(&req.mariadb.Status, elapsed.String())
+	}); err != nil {
+		return fmt.Errorf("error patching MariaDB status: %v", err)
+	}
+
+	logger.Info("Switchover aborted")
+	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeWarning, mariadbv1alpha1.ReasonReplicationSwitchoverTimeout,
+		mariadbv1alpha1.ActionReconciling, "Switchover timed out after %s, reverted to primary at index '%d'",
+		elapsed, *req.mariadb.Status.CurrentPrimaryPodIndex)
 	return nil
 }
 

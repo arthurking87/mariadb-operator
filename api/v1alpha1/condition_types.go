@@ -36,6 +36,7 @@ const (
 	ConditionReasonReplayBinlogsError    string = "ReplayBinlogsError"
 	ConditionReasonReplayBinlogsSkipped  string = "ReplayBinlogsSkipped"
 	ConditionReasonSwitchPrimary         string = "SwitchPrimary"
+	ConditionReasonSwitchoverTimeout     string = "SwitchoverTimeout"
 	ConditionReasonGaleraReady           string = "GaleraReady"
 	ConditionReasonGaleraNotReady        string = "GaleraNotReady"
 	ConditionReasonGaleraConfigured      string = "GaleraConfigured"

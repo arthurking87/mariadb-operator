@@ -34,3 +34,12 @@ func SetPrimarySwitched(c Conditioner) {
 		Message: "Switchover complete",
 	})
 }
+
+func SetPrimarySwitchoverTimeout(c Conditioner, elapsed string) {
+	c.SetCondition(metav1.Condition{
+		Type:    mariadbv1alpha1.ConditionTypePrimarySwitched,
+		Status:  metav1.ConditionTrue,
+		Reason:  mariadbv1alpha1.ConditionReasonSwitchoverTimeout,
+		Message: fmt.Sprintf("Switchover timed out after %s, reverted to previous primary", elapsed),
+	})
+}
