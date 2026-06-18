@@ -20,7 +20,7 @@ var (
 // their health (CRD status, switchover state, conditions, Pod readiness, SQL
 // reachability, GTID domain ID consistency and root password age) as Prometheus
 // gauges. It is registered with the controller-runtime manager via mgr.Add, which
-// runs it only on the elected leader and stops it when ctx is cancelled.
+// runs it only on the elected leader and stops it when ctx is canceled.
 type Runnable struct {
 	Client            client.Client
 	RefResolver       *refresolver.RefResolver
