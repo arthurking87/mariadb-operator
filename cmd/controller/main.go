@@ -41,9 +41,11 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/log"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metadata"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/scheduledcheck"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -91,6 +93,8 @@ var (
 
 	syncPeriod       time.Duration
 	cacheSyncTimeout time.Duration
+
+	scheduledCheckInterval time.Duration
 
 	webhookEnabled bool
 	webhookPort    int
@@ -159,6 +163,10 @@ func init() {
 
 	rootCmd.Flags().DurationVar(&syncPeriod, "sync-period", 10*time.Hour, "The interval at which watched resources are reconciled.")
 	rootCmd.Flags().DurationVar(&cacheSyncTimeout, "cache-sync-timeout", 2*time.Minute, "The time limit set to wait for syncing caches.")
+
+	rootCmd.Flags().DurationVar(&scheduledCheckInterval, "scheduled-check-interval", 120*time.Second,
+		"The interval at which the scheduled health check (CRD/Pod status, GTID domain id consistency, "+
+			"root password age) runs. Only runs on the leader replica.")
 
 	rootCmd.Flags().BoolVar(&webhookEnabled, "webhook", false, "Enable the webhook server.")
 	rootCmd.Flags().IntVar(&webhookPort, "webhook-port", 9443, "Port to be used by the webhook server."+
@@ -239,8 +247,9 @@ var rootCmd = &cobra.Command{
 			mgrOpts.PprofBindAddress = pprofAddr
 		}
 
+		var namespaces []string
 		if env.WatchNamespace != "" {
-			namespaces, err := env.WatchNamespaces()
+			namespaces, err = env.WatchNamespaces()
 			if err != nil {
 				setupLog.Error(err, "Error getting namespaces to watch")
 				os.Exit(1)
@@ -252,6 +261,8 @@ var rootCmd = &cobra.Command{
 			}
 		} else {
 			setupLog.Info("Watching all namespaces")
+			// metav1.NamespaceAll ("") tells client.List to look across every namespace.
+			namespaces = []string{metav1.NamespaceAll}
 		}
 		mgr, err := ctrl.NewManager(restConfig, mgrOpts)
 		if err != nil {
@@ -282,6 +293,19 @@ var rootCmd = &cobra.Command{
 		}
 		builder := builder.NewBuilder(scheme, env, discovery)
 		refResolver := refresolver.New(client)
+
+		if err := mgr.Add(&scheduledcheck.Runnable{
+			Client:            client,
+			RefResolver:       refResolver,
+			Namespaces:        namespaces,
+			OperatorNamespace: env.MariadbOperatorNamespace,
+			OperatorName:      os.Getenv("HOSTNAME"),
+			Interval:          scheduledCheckInterval,
+			Logger:            ctrl.Log.WithName("scheduledcheck"),
+		}); err != nil {
+			setupLog.Error(err, "Unable to add scheduled check runnable")
+			os.Exit(1)
+		}
 
 		conditionReady := condition.NewReady()
 		conditionComplete := condition.NewComplete(client)
