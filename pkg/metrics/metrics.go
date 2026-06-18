@@ -72,3 +72,15 @@ func init() {
 		SwitchoverTotal,
 	)
 }
+
+// DeleteSwitchoverMetrics removes all switchover series for a given MariaDB instance.
+// It must be called once the MariaDB object is gone, otherwise its series linger in the
+// registry forever (stale data, unbounded cardinality growth across CR churn).
+func DeleteSwitchoverMetrics(namespace, mariadb string) {
+	match := prometheus.Labels{"namespace": namespace, "mariadb": mariadb}
+	SwitchoverDuration.DeletePartialMatch(match)
+	SwitchoverLastDuration.DeletePartialMatch(match)
+	SwitchoverPhaseDuration.DeletePartialMatch(match)
+	SwitchoverPhaseLastDuration.DeletePartialMatch(match)
+	SwitchoverTotal.DeletePartialMatch(match)
+}

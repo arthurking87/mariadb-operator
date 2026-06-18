@@ -299,6 +299,46 @@ func TestSwitchoverMetrics_MultipleInstances_IndependentSeries(t *testing.T) {
 	}
 }
 
+func TestDeleteSwitchoverMetrics_RemovesOnlyTargetInstance(t *testing.T) {
+	// Operate on the real package-level vars, since DeleteSwitchoverMetrics does.
+	const (
+		ns1, mdb1 = "ns1", "mariadb-a"
+		ns2, mdb2 = "ns2", "mariadb-b"
+	)
+	t.Cleanup(func() {
+		DeleteSwitchoverMetrics(ns1, mdb1)
+		DeleteSwitchoverMetrics(ns2, mdb2)
+	})
+
+	SwitchoverDuration.WithLabelValues(ns1, mdb1, labelSuccess).Observe(1)
+	SwitchoverLastDuration.WithLabelValues(ns1, mdb1).Set(1)
+	SwitchoverPhaseDuration.WithLabelValues(ns1, mdb1, "wait_sync", labelSuccess).Observe(1)
+	SwitchoverPhaseLastDuration.WithLabelValues(ns1, mdb1, "wait_sync").Set(1)
+	SwitchoverTotal.WithLabelValues(ns1, mdb1, "0", "1", labelSuccess).Inc()
+
+	SwitchoverDuration.WithLabelValues(ns2, mdb2, labelSuccess).Observe(1)
+	SwitchoverLastDuration.WithLabelValues(ns2, mdb2).Set(1)
+	SwitchoverPhaseDuration.WithLabelValues(ns2, mdb2, "wait_sync", labelSuccess).Observe(1)
+	SwitchoverPhaseLastDuration.WithLabelValues(ns2, mdb2, "wait_sync").Set(1)
+	SwitchoverTotal.WithLabelValues(ns2, mdb2, "0", "1", labelSuccess).Inc()
+
+	DeleteSwitchoverMetrics(ns1, mdb1)
+
+	if v := testutil.ToFloat64(SwitchoverLastDuration.WithLabelValues(ns1, mdb1)); v != 0 {
+		t.Errorf("ns1/mdb1 SwitchoverLastDuration should be gone, got %v (re-created on access)", v)
+	}
+	if v := testutil.ToFloat64(SwitchoverTotal.WithLabelValues(ns1, mdb1, "0", "1", labelSuccess)); v != 0 {
+		t.Errorf("ns1/mdb1 SwitchoverTotal should be gone, got %v", v)
+	}
+
+	if v := testutil.ToFloat64(SwitchoverLastDuration.WithLabelValues(ns2, mdb2)); v != 1 {
+		t.Errorf("ns2/mdb2 SwitchoverLastDuration should survive, want 1, got %v", v)
+	}
+	if v := testutil.ToFloat64(SwitchoverTotal.WithLabelValues(ns2, mdb2, "0", "1", labelSuccess)); v != 1 {
+		t.Errorf("ns2/mdb2 SwitchoverTotal should survive, want 1, got %v", v)
+	}
+}
+
 func TestSwitchoverTotal_CountsByTransitionPath(t *testing.T) {
 	counter := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "test_switchover_total_transition",
