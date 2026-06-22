@@ -100,6 +100,18 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			if apierrors.IsNotFound(err) {
 				return err
 			}
+			// A failure here (most commonly "Wait sync" timing out on a lagging
+			// replica) would otherwise leave the primary locked + read-only
+			// indefinitely: isSwitchoverStale() doesn't catch this, because the
+			// switchover is still "required" from the spec's point of view
+			// (status.currentPrimaryPodIndex was never updated), so the next
+			// reconcile just retries the same phases from "Lock primary with
+			// read lock" again instead of going through the stale-switchover
+			// recovery path. Roll back write access so the cluster isn't stuck
+			// rejecting writes while switchover keeps retrying.
+			if rollbackErr := r.rollbackSwitchover(ctx, req, logger); rollbackErr != nil {
+				logger.Error(rollbackErr, "error rolling back switchover after failed phase", "phase", p.name)
+			}
 			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, err)
 		}
 	}
@@ -114,6 +126,31 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	logger.Info("Primary switched")
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitched,
 		mariadbv1alpha1.ActionReconciling, "Primary switched from index '%d' to index '%d'", *primary, newPrimary)
+	return nil
+}
+
+// rollbackSwitchover restores write access to the current primary after a
+// switchover phase fails partway through (after the primary was already
+// locked/set read-only by lockPrimaryWithReadLock/setPrimaryReadOnly).
+// UnlockTables/DisableReadOnly are safe to call even if the primary was
+// never actually locked/read-only yet (e.g. the failure happened in one of
+// those two phases themselves): both are no-ops in that case.
+func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger) error {
+	if !req.currentPrimaryReady {
+		return nil
+	}
+	client, err := req.replClientSet.currentPrimaryClient(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting current primary client: %v", err)
+	}
+
+	logger.Info("Rolling back switchover: restoring primary write access")
+	if err := client.UnlockTables(ctx); err != nil {
+		return fmt.Errorf("error unlocking primary: %v", err)
+	}
+	if err := client.DisableReadOnly(ctx); err != nil {
+		return fmt.Errorf("error disabling readonly in primary: %v", err)
+	}
 	return nil
 }
 
