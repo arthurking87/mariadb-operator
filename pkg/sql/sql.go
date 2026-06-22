@@ -783,6 +783,26 @@ func (c *Client) ResetSlave(ctx context.Context, replOpts ...ReplicationOpt) err
 	return c.Exec(ctx, fmt.Sprintf("RESET SLAVE %s ALL;", opts.ConnectionName))
 }
 
+// ResetReplica is the "RESET REPLICA" equivalent of ResetSlave. "RESET SLAVE"
+// is a deprecated alias kept by MariaDB for backwards compatibility (see
+// https://mariadb.com/kb/en/reset-replica/); ResetReplica uses the current
+// syntax instead. It's a no-op if the given channel isn't currently
+// configured as a replica, so callers don't need to check beforehand.
+//
+// ResetSlave's callers were intentionally left untouched in this change —
+// migrating them to ResetReplica is a separate decision for maintainers.
+func (c *Client) ResetReplica(ctx context.Context, replOpts ...ReplicationOpt) error {
+	opts := getReplOpts(replOpts...)
+	isReplica, err := c.IsReplicationReplica(ctx, replOpts...)
+	if err != nil {
+		return fmt.Errorf("error checking replica status: %v", err)
+	}
+	if !isReplica {
+		return nil
+	}
+	return c.Exec(ctx, fmt.Sprintf("RESET REPLICA %s ALL;", opts.ConnectionName))
+}
+
 func (c *Client) WaitForReplicaGtid(ctx context.Context, gtid string, timeout time.Duration) error {
 	sql := fmt.Sprintf("SELECT MASTER_GTID_WAIT('%s', %d);", gtid, int(timeout.Seconds()))
 	row := c.db.QueryRowContext(ctx, sql)
