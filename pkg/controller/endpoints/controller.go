@@ -105,6 +105,11 @@ func (r *EndpointsReconciler) endpointSlice(ctx context.Context, key types.Names
 		return nil, errNoEndpointsAvailable
 	}
 
+	// Every secondary Pod gets an Endpoint entry here regardless of readiness —
+	// see buildEndpoint, which sets Conditions.Ready per-Pod but never drops
+	// the entry. We don't remove not-ready Pods from the EndpointSlice
+	// ourselves; we rely on kube-proxy (and other EndpointSlice consumers)
+	// honoring Ready=false and excluding those addresses from regular traffic.
 	endpoints := []discoveryv1.Endpoint{}
 	for _, pod := range pods {
 		endpoint, err := buildEndpoint(&pod)
