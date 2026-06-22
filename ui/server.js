@@ -1,10 +1,22 @@
 import express from 'express'
 import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
+import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const execAsync = promisify(exec)
 const app = express()
 app.use(express.json())
+
+// Helm release managed by this UI — configurable so the same image works
+// regardless of which namespace the operator chart is installed into.
+const HELM_RELEASE_NAME = process.env.HELM_RELEASE_NAME || 'mariadb-operator'
+const HELM_RELEASE_NAMESPACE = process.env.HELM_RELEASE_NAMESPACE || 'test1'
+// Chart sources baked into the image (see Dockerfile); override for local dev.
+const HELM_CHART_PATH = process.env.HELM_CHART_PATH
+  || path.join(__dirname, 'charts', 'mariadb-operator')
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +86,47 @@ function buildYAML(form) {
   return lines.join('\n')
 }
 
+// Records an action performed from the UI as a real Kubernetes Event, so it shows up
+// merged with the operator's own reconciler events in the same /api/activity feed —
+// no separate storage needed. Best-effort: a failure here must never fail the caller's
+// actual operation, so errors are swallowed (and logged).
+async function recordUiEvent({ namespace, name, kind = 'MariaDB', reason, message }) {
+  const now = new Date().toISOString()
+  const yaml = [
+    `apiVersion: v1`,
+    `kind: Event`,
+    `metadata:`,
+    `  generateName: mariadb-ui-`,
+    `  namespace: ${namespace}`,
+    `involvedObject:`,
+    `  apiVersion: k8s.mariadb.com/v1alpha1`,
+    `  kind: ${kind}`,
+    `  name: ${name}`,
+    `  namespace: ${namespace}`,
+    `reason: ${reason}`,
+    `message: ${JSON.stringify(message)}`,
+    `type: Normal`,
+    `firstTimestamp: "${now}"`,
+    `lastTimestamp: "${now}"`,
+    `count: 1`,
+    `source:`,
+    `  component: mariadb-operator-ui`,
+  ].join('\n')
+
+  try {
+    await new Promise((resolve, reject) => {
+      const child = exec(`kubectl create -f -`, (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message))
+        else resolve(stdout)
+      })
+      child.stdin.write(yaml)
+      child.stdin.end()
+    })
+  } catch (err) {
+    console.error('Failed to record UI activity event:', err.message)
+  }
+}
+
 // ── routes ────────────────────────────────────────────────────────────────────
 
 // ── helm ──────────────────────────────────────────────────────────────────────
@@ -81,8 +134,8 @@ function buildYAML(form) {
 app.get('/api/helm/values', async (req, res) => {
   try {
     const [allOut, userOut] = await Promise.all([
-      execAsync('helm get values mariadb-operator -n test1 --all -o json'),
-      execAsync('helm get values mariadb-operator -n test1 -o json'),
+      execAsync(`helm get values ${HELM_RELEASE_NAME} -n ${HELM_RELEASE_NAMESPACE} --all -o json`),
+      execAsync(`helm get values ${HELM_RELEASE_NAME} -n ${HELM_RELEASE_NAMESPACE} -o json`),
     ])
     res.json({ all: JSON.parse(allOut.stdout), user: JSON.parse(userOut.stdout) })
   } catch (err) {
@@ -96,7 +149,7 @@ app.post('/api/helm/upgrade', async (req, res) => {
     const yaml = toHelmYAML(values)
     await new Promise((resolve, reject) => {
       const child = exec(
-        `helm upgrade mariadb-operator /home/kasm-user/Downloads/mariadb-operator/deploy/charts/mariadb-operator -n test1 -f -`,
+        `helm upgrade ${HELM_RELEASE_NAME} ${HELM_CHART_PATH} -n ${HELM_RELEASE_NAMESPACE} -f -`,
         (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)
       )
       child.stdin.write(yaml)
@@ -514,5 +567,14 @@ app.delete('/api/instances/:namespace/:name', async (req, res) => {
   }
 })
 
-const PORT = 3001
+// Serve the built frontend (vite build → dist/) so a single container/Pod
+// can expose both the API and the UI on one port. No-op in local dev, where
+// the Vite dev server (port 5173) serves the UI instead and dist/ is absent.
+const distDir = path.join(__dirname, 'dist')
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir))
+  app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(distDir, 'index.html')))
+}
+
+const PORT = process.env.PORT || 3001
 app.listen(PORT, () => console.log(`API server listening on http://localhost:${PORT}`))

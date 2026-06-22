@@ -1,0 +1,45 @@
+# OPTIONAL — only needed for the "Helm Values" page's upgrade button
+# (POST /api/helm/upgrade), which re-applies the entire mariadb-operator
+# chart. Apply this file only if you intend to use that feature.
+#
+# Risk: this grants the operator's own ServiceAccount permission to modify
+# its own ClusterRole/ClusterRoleBinding and webhook configs. Kubernetes'
+# privilege-escalation protection means a `helm upgrade` that changes the
+# operator's RBAC rules may still be rejected even with these grants present,
+# unless the SA already has every permission it's trying to assign (or the
+# "escalate"/"bind" verbs are added, which is not done here on purpose).
+# Treat this as a known limitation rather than working around it by widening
+# scope further — review chart diffs manually before changing operator RBAC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mariadb-operator-ui-helm-self-upgrade
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "create", "patch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "create", "patch"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "issuers"]
+    verbs: ["get", "list", "create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mariadb-operator-ui-helm-self-upgrade
+subjects:
+  - kind: ServiceAccount
+    name: mariadb-operator
+    namespace: test1
+roleRef:
+  kind: ClusterRole
+  name: mariadb-operator-ui-helm-self-upgrade
+  apiGroup: rbac.authorization.k8s.io

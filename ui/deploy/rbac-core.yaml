@@ -1,0 +1,35 @@
+# Incremental RBAC for mariadb-operator-ui, bound to the *existing* operator
+# ServiceAccount (mariadb-operator/test1). Kept separate from the chart-owned
+# "mariadb-operator" ClusterRole so a `helm upgrade` of the operator chart
+# never reverts these grants.
+#
+# Everything else the UI needs (mariadbs CRUD, pods/services list, events
+# list+create) is already present on the operator's ClusterRole — this file
+# only adds the gaps:
+#   - namespaces: not granted to the operator at all
+#   - secrets: operator has create/list/patch/watch but not "get", which
+#     `kubectl apply` needs to check if a Secret already exists
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mariadb-operator-ui-core
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mariadb-operator-ui-core
+subjects:
+  - kind: ServiceAccount
+    name: mariadb-operator
+    namespace: test1
+roleRef:
+  kind: ClusterRole
+  name: mariadb-operator-ui-core
+  apiGroup: rbac.authorization.k8s.io

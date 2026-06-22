@@ -17,3 +17,7 @@ ui-stop: ## Stop the background UI API server.
 .PHONY: ui-build
 ui-build: ## Build UI static files to ui/dist/.
 	cd $(UI_DIR) && npm run build
+
+.PHONY: ui-docker-build
+ui-docker-build: ## Build the UI container image (must run from repo root).
+	docker build -f $(UI_DIR)/Dockerfile -t mariadb-operator-ui:latest .
