@@ -56,15 +56,6 @@ func TestNewReplicationConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid server ID",
-			env: &env.PodEnvironment{
-				PodName:            "foo",
-				MariadbName:        "mariadb",
-				MariaDBReplEnabled: "true",
-			},
-			wantErr: true,
-		},
-		{
 			name: "invalid master sync binlog",
 			env: &env.PodEnvironment{
 				PodName:                     "mariadb-0",
@@ -84,7 +75,6 @@ func TestNewReplicationConfig(t *testing.T) {
 			wantConfig: `[mariadb]
 log_bin
 log_basename=mariadb
-server_id=10
 `,
 			wantErr: false,
 		},
@@ -101,7 +91,6 @@ log_bin
 log_basename=mariadb
 rpl_semi_sync_master_enabled=ON
 rpl_semi_sync_slave_enabled=ON
-server_id=10
 `,
 			wantErr: false,
 		},
@@ -123,7 +112,6 @@ gtid_strict_mode
 rpl_semi_sync_master_enabled=ON
 rpl_semi_sync_slave_enabled=ON
 rpl_semi_sync_master_wait_point=AFTER_SYNC
-server_id=10
 sync_binlog=1
 `,
 			wantErr: false,
@@ -146,7 +134,6 @@ gtid_strict_mode
 rpl_semi_sync_master_enabled=ON
 rpl_semi_sync_slave_enabled=ON
 rpl_semi_sync_master_timeout=5000
-server_id=10
 sync_binlog=1
 `,
 			wantErr: false,
@@ -163,22 +150,6 @@ sync_binlog=1
 log_bin
 log_basename=mariadb
 gtid_domain_id=1
-server_id=10
-`,
-			wantErr: false,
-		},
-		{
-			name: "with custom server ID start index",
-			env: &env.PodEnvironment{
-				PodName:                       "mariadb-2",
-				MariadbName:                   "mariadb",
-				MariaDBReplEnabled:            "true",
-				MariaDBReplServerIDStartIndex: "100",
-			},
-			wantConfig: `[mariadb]
-log_bin
-log_basename=mariadb
-server_id=102
 `,
 			wantErr: false,
 		},
@@ -190,7 +161,6 @@ server_id=102
 				MariaDBReplEnabled:                 "true",
 				MariaDBReplGtidStrictMode:          "true",
 				MariaDBReplGtidDomainID:            "1",
-				MariaDBReplServerIDStartIndex:      "100",
 				MariaDBReplSemiSyncEnabled:         "true",
 				MariaDBReplSemiSyncMasterTimeout:   "5000",
 				MariaDBReplSemiSyncMasterWaitPoint: "AFTER_SYNC",
@@ -205,7 +175,6 @@ rpl_semi_sync_master_enabled=ON
 rpl_semi_sync_slave_enabled=ON
 rpl_semi_sync_master_timeout=5000
 rpl_semi_sync_master_wait_point=AFTER_SYNC
-server_id=100
 sync_binlog=1
 `,
 			wantErr: false,
@@ -315,168 +284,3 @@ func TestGtidDomainID(t *testing.T) {
 	}
 }
 
-func TestServerIDStartIndex(t *testing.T) {
-	tests := []struct {
-		name          string
-		rawStartIndex string
-		want          int
-		wantErr       bool
-	}{
-		{
-			name:          "empty string returns default",
-			rawStartIndex: "",
-			want:          10,
-			wantErr:       false,
-		},
-		{
-			name:          "valid start index zero",
-			rawStartIndex: "0",
-			want:          0,
-			wantErr:       false,
-		},
-		{
-			name:          "valid start index",
-			rawStartIndex: "100",
-			want:          100,
-			wantErr:       false,
-		},
-		{
-			name:          "valid start index large",
-			rawStartIndex: "999999",
-			want:          999999,
-			wantErr:       false,
-		},
-		{
-			name:          "invalid string",
-			rawStartIndex: "foo",
-			want:          0,
-			wantErr:       true,
-		},
-		{
-			name:          "invalid float",
-			rawStartIndex: "3.14",
-			want:          0,
-			wantErr:       true,
-		},
-		{
-			name:          "invalid with whitespace",
-			rawStartIndex: " 10 ",
-			want:          0,
-			wantErr:       true,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := serverIDStartIndex(tt.rawStartIndex)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if got != tt.want {
-				t.Errorf("expected %d, got %d", tt.want, got)
-			}
-		})
-	}
-}
-
-func TestServerID(t *testing.T) {
-	tests := []struct {
-		name       string
-		podName    string
-		startIndex int
-		want       int
-		wantErr    bool
-	}{
-		{
-			name:       "first pod with default start index",
-			podName:    "mariadb-0",
-			startIndex: 10,
-			want:       10,
-			wantErr:    false,
-		},
-		{
-			name:       "second pod with default start index",
-			podName:    "mariadb-1",
-			startIndex: 10,
-			want:       11,
-			wantErr:    false,
-		},
-		{
-			name:       "third pod with default start index",
-			podName:    "mariadb-2",
-			startIndex: 10,
-			want:       12,
-			wantErr:    false,
-		},
-		{
-			name:       "first pod with custom start index",
-			podName:    "mariadb-0",
-			startIndex: 100,
-			want:       100,
-			wantErr:    false,
-		},
-		{
-			name:       "second pod with custom start index",
-			podName:    "mariadb-1",
-			startIndex: 100,
-			want:       101,
-			wantErr:    false,
-		},
-		{
-			name:       "pod with zero start index",
-			podName:    "mariadb-5",
-			startIndex: 0,
-			want:       5,
-			wantErr:    false,
-		},
-		{
-			name:       "pod with large index",
-			podName:    "mariadb-99",
-			startIndex: 10,
-			want:       109,
-			wantErr:    false,
-		},
-		{
-			name:       "invalid pod name",
-			podName:    "foo",
-			startIndex: 10,
-			want:       0,
-			wantErr:    true,
-		},
-		{
-			name:       "pod name without number",
-			podName:    "mariadb",
-			startIndex: 10,
-			want:       0,
-			wantErr:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := serverId(tt.podName, tt.startIndex)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if got != tt.want {
-				t.Errorf("expected %d, got %d", tt.want, got)
-			}
-		})
-	}
-}
