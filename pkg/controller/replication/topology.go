@@ -165,9 +165,10 @@ func (r *singleClusterTopology) ConfigureReplica(ctx context.Context, client *sq
 	primaryPodIndex int, replicaOpts ...ConfigureReplicaOpt) error {
 	r.logger.Info("Configuring replica")
 
-	opts := ConfigureReplicaOpts{
-		ResetMaster: true,
-	}
+	// ResetMaster now defaults to off (opt-in via WithResetMaster(true)) instead
+	// of defaulting on with per-case opt-out. No caller currently opts in, so
+	// this disables the RESET MASTER step on the single-cluster path entirely.
+	opts := ConfigureReplicaOpts{}
 	for _, setOpt := range replicaOpts {
 		setOpt(&opts)
 	}
