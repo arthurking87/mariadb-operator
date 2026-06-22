@@ -109,7 +109,18 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		log.FromContext(ctx).WithName("failover").V(1),
 	).FurthestAdvancedReplica(ctx)
 	if err != nil {
-		return fmt.Errorf("error getting promotion candidate: %v", err)
+		// FurthestAdvancedReplica already filters out replicas with a dead
+		// IO/SQL thread, unset GTID position, or relay log events still
+		// pending (see findCandidates in failover.go) — if it comes back
+		// empty, every replica is currently unhealthy too. Returning an error
+		// here would make the caller requeue-with-backoff and retry this
+		// exact same failing lookup on a tight loop. Since CurrentPrimaryFailingSince
+		// stays set, we keep monitoring and will attempt failover again on
+		// the next reconcile without erroring out in the meantime.
+		logger.Info("No viable failover candidate found, keeping current primary", "primary", *primary, "reason", err.Error())
+		r.recorder.Eventf(mariadb, nil, corev1.EventTypeWarning, mariadbv1alpha1.ReasonNoFailoverCandidate, mariadbv1alpha1.ActionReconciling,
+			"No viable failover candidate found for primary '%d': %v", *primary, err)
+		return nil
 	}
 	newPrimary, err := statefulset.PodIndex(newPrimaryName)
 	if err != nil {
