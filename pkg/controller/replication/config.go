@@ -8,6 +8,7 @@ import (
 	"text/template"
 
 	env "github.com/mariadb-operator/mariadb-operator/v26/pkg/environment"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 )
 
 func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
@@ -33,6 +34,14 @@ func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
 	semiSyncMasterTimeout, err := env.ReplSemiSyncMasterTimeout()
 	if err != nil {
 		return nil, fmt.Errorf("error getting semi-sync master timeout: %v", err)
+	}
+	serverIDStartIndex, err := serverIDStartIndex(env.MariaDBReplServerIDStartIndex)
+	if err != nil {
+		return nil, fmt.Errorf("error getting server ID start index: %v", err)
+	}
+	serverID, err := serverId(env.PodName, serverIDStartIndex)
+	if err != nil {
+		return nil, fmt.Errorf("error getting server ID: %v", err)
 	}
 	syncBinlog, err := env.ReplSyncBinlog()
 	if err != nil {
@@ -60,6 +69,7 @@ rpl_semi_sync_master_timeout={{ . }}
 rpl_semi_sync_master_wait_point={{ . }}
 {{- end }}
 {{- end }}
+server_id={{ .ServerID }}
 {{- with .SyncBinlog }}
 sync_binlog={{ . }}
 {{- end }}
@@ -73,6 +83,7 @@ sync_binlog={{ . }}
 		SemiSyncMasterTimeout   *int64
 		SemiSyncMasterWaitPoint string
 		SyncBinlog              *int
+		ServerID                int
 	}{
 		LogName:                 env.MariadbName,
 		GtidStrictMode:          gtidStrictMode,
@@ -80,6 +91,7 @@ sync_binlog={{ . }}
 		SemiSyncEnabled:         semiSyncEnabled,
 		SemiSyncMasterTimeout:   semiSyncMasterTimeout,
 		SemiSyncMasterWaitPoint: env.MariaDBReplSemiSyncMasterWaitPoint,
+		ServerID:                serverID,
 		SyncBinlog:              syncBinlog,
 	})
 	if err != nil {
@@ -97,6 +109,25 @@ func gtidDomainID(rawGtidDomainID string) (*int, error) {
 		return nil, fmt.Errorf("error parsing GTID domain ID: %v", err)
 	}
 	return &gtidDomainId, nil
+}
+
+func serverIDStartIndex(rawStartIndex string) (int, error) {
+	if rawStartIndex == "" {
+		return 10, nil
+	}
+	startIndex, err := strconv.Atoi(rawStartIndex)
+	if err != nil {
+		return 0, fmt.Errorf("serverID start index could not be parsed. %v", err)
+	}
+	return startIndex, nil
+}
+
+func serverId(podName string, startIndex int) (int, error) {
+	podIndex, err := statefulset.PodIndex(podName)
+	if err != nil {
+		return 0, fmt.Errorf("error getting Pod index: %v", err)
+	}
+	return startIndex + *podIndex, nil
 }
 
 func formatAccountName(username, host string) string {
