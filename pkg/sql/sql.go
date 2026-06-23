@@ -415,7 +415,7 @@ func (c *Client) Exec(ctx context.Context, sql string, args ...any) error {
 
 // Query and QueryRow deliberately do NOT cancel their derived timeout
 // context before returning: the returned *sql.Rows/*sql.Row is consumed by
-// the caller afterwards (Next()/Scan()), and cancelling early would abort
+// the caller afterwards (Next()/Scan()), and canceling early would abort
 // the still-open cursor before it's read. The timeout context expires on
 // its own after defaultQueryTimeout if the caller didn't set a shorter
 // deadline, so this doesn't leak past that bound.
@@ -432,7 +432,7 @@ func (c *Client) Query(ctx context.Context, sql string, args ...any) (*sql.Rows,
 	return rows, nil
 }
 
-// See Query's comment on why the timeout context isn't cancelled here.
+// See Query's comment on why the timeout context isn't canceled here.
 func (c *Client) QueryRow(ctx context.Context, sql string, args ...any) *sql.Row {
 	qctx, _ := withTimeout(ctx)
 	return c.db.QueryRowContext(qctx, sql, args...)
