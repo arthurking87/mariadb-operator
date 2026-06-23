@@ -36,6 +36,14 @@ var (
 // connection (e.g. a Pod that went away without closing the socket).
 const defaultQueryTimeout = 10 * time.Second
 
+// gtidWaitGracePeriod is added on top of the caller-supplied timeout when
+// waiting for MASTER_GTID_WAIT, so the Go-level context deadline always
+// expires after MariaDB's own server-side wait. Without this margin, the two
+// timers race: the context can fire first and abort the connection with a
+// raw "context deadline exceeded"/EOF instead of letting the query return
+// its own clean timeout result (-1).
+const gtidWaitGracePeriod = 5 * time.Second
+
 // withTimeout returns ctx unchanged if it already carries a deadline,
 // otherwise it attaches defaultQueryTimeout. The returned cancel func must
 // always be called by the caller.
@@ -832,6 +840,13 @@ func (c *Client) ResetSlave(ctx context.Context, replOpts ...ReplicationOpt) err
 
 func (c *Client) WaitForReplicaGtid(ctx context.Context, gtid string, timeout time.Duration) error {
 	sql := fmt.Sprintf("SELECT MASTER_GTID_WAIT('%s', %d);", gtid, int(timeout.Seconds()))
+	// MASTER_GTID_WAIT already bounds itself to timeout server-side. Attach a
+	// slightly longer deadline here so that bound — not withTimeout's
+	// unrelated defaultQueryTimeout — governs how long this call can take,
+	// and so the query has a chance to return its own clean -1 result before
+	// the context tears down the connection.
+	ctx, cancel := context.WithTimeout(ctx, timeout+gtidWaitGracePeriod)
+	defer cancel()
 	row := c.QueryRow(ctx, sql)
 
 	var result int
