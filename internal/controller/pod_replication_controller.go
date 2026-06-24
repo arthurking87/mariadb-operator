@@ -135,6 +135,14 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 	r.recorder.Eventf(mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitching, mariadbv1alpha1.ActionReconciling,
 		"Switching primary from index '%d' to index '%d'", *primary, *newPrimary)
 
+	// The old primary may still be holding application connections open (e.g. it is
+	// NotReady due to a failed health check rather than a crashed mariadbd process),
+	// which would otherwise sit until the client times out. Deleting it forces those
+	// connections closed and lets the StatefulSet recreate it cleanly as a replica.
+	if err := r.Delete(ctx, &pod); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("error deleting Pod '%s': %v", pod.Name, err)
+	}
+
 	return nil
 }
 
