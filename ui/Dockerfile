@@ -12,7 +12,10 @@ RUN npm run build
 FROM node:20-alpine
 ARG KUBECTL_VERSION=v1.31.0
 ARG HELM_VERSION=v3.16.2
-RUN apk add --no-cache curl bash \
+ARG NPM_VERSION=11.17.0
+RUN apk update \
+  && apk add --no-cache --upgrade libssl3 libcrypto3 \
+  && apk add --no-cache curl bash \
   && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')/kubectl" \
   && chmod +x /usr/local/bin/kubectl \
   && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
@@ -22,6 +25,9 @@ RUN apk add --no-cache curl bash \
   && apk del curl
 
 WORKDIR /app
+# Bundled npm ships its own vendored tar/minimatch/brace-expansion; pin to a
+# version with patched copies (CVE-2026-26960, CVE-2026-26996, CVE-2026-33750).
+RUN npm install -g "npm@${NPM_VERSION}"
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci --omit=dev
 COPY ui/server.js ./
