@@ -413,26 +413,26 @@ func (c *Client) Exec(ctx context.Context, sql string, args ...any) error {
 	return err
 }
 
-// Query and QueryRow deliberately do NOT cancel their derived timeout
-// context before returning: the returned *sql.Rows/*sql.Row is consumed by
-// the caller afterwards (Next()/Scan()), and canceling early would abort
-// the still-open cursor before it's read. The timeout context expires on
-// its own after defaultQueryTimeout if the caller didn't set a shorter
-// deadline, so this doesn't leak past that bound.
+// Query deliberately does NOT apply withTimeout's self-expiring deadline:
+// the returned *sql.Rows is consumed by the caller afterwards (Next/Scan),
+// and database/sql can discard the underlying pooled connection out from
+// under unrelated callers once a Query's context expires - even after the
+// rows have already been fully read and closed. Ping below already fails
+// fast against a dead connection, and the caller's own ctx (if it carries a
+// deadline) still applies as-is.
 func (c *Client) Query(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
 	if err := c.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("error pinging database: %v", err)
 	}
-	qctx, cancel := withTimeout(ctx)
-	rows, err := c.db.QueryContext(qctx, sql, args...)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	return rows, nil
+	return c.db.QueryContext(ctx, sql, args...)
 }
 
-// See Query's comment on why the timeout context isn't canceled here.
+// QueryRow deliberately does NOT cancel its derived timeout context before
+// returning: the returned *sql.Row is consumed by the caller afterwards
+// (Scan), and canceling early would abort the still-open cursor before it's
+// read. The timeout context expires on its own after defaultQueryTimeout if
+// the caller didn't set a shorter deadline, so this doesn't leak past that
+// bound.
 func (c *Client) QueryRow(ctx context.Context, sql string, args ...any) *sql.Row {
 	qctx, _ := withTimeout(ctx)
 	return c.db.QueryRowContext(qctx, sql, args...)
