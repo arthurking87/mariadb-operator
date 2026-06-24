@@ -74,6 +74,11 @@ func (r *MariaDBReconciler) reconcileUpdates(ctx context.Context, mdb *mariadbv1
 			logger.V(1).Info("Replica Pod up to date", "pod", replicaPod.Name)
 			continue
 		}
+		if _, ok := replicaPod.Annotations[metadata.SkipUpdateAnnotation]; ok {
+			logger.Info("Skipping stale replica Pod due to bypass annotation", "pod", replicaPod.Name,
+				"annotation", metadata.SkipUpdateAnnotation)
+			continue
+		}
 		logger.Info("Updating replica Pod", "pod", replicaPod.Name)
 		if err := r.updatePod(ctx, mariadbKey, &replicaPod, stsUpdateRevision, logger); err != nil {
 			return ctrl.Result{}, fmt.Errorf("error updating replica Pod '%s': %v", replicaPod.Name, err)
