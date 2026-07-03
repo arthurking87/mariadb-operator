@@ -62,3 +62,6 @@ pprof.out
 
 # Git patches
 *.patch
+
+# Local Claude Code settings
+.claude/settings.local.json

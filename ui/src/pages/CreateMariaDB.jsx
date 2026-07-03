@@ -386,9 +386,9 @@ function StepSecurity({ form, update, errors }) {
 
 function ReviewRow({ label, value, accent }) {
   return (
-    <div className="flex items-center justify-between py-2.5 border-b" style={{ borderColor: '#21262d' }}>
+    <div className="grid items-center gap-4 py-2.5 px-4 border-b" style={{ gridTemplateColumns: '160px 1fr', borderColor: '#21262d' }}>
       <span className="text-sm" style={{ color: '#8b949e' }}>{label}</span>
-      <span className="text-sm font-medium" style={{ color: accent || '#e6edf3' }}>{String(value)}</span>
+      <span className="text-sm font-medium truncate" style={{ color: accent || '#e6edf3' }}>{String(value)}</span>
     </div>
   )
 }
