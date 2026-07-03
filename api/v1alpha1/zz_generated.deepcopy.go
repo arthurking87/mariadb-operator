@@ -4473,6 +4473,13 @@ func (in *ReplicationStatus) DeepCopyInto(out *ReplicationStatus) {
 			(*out)[key] = val
 		}
 	}
+	if in.ConfigHashes != nil {
+		in, out := &in.ConfigHashes, &out.ConfigHashes
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Replicas != nil {
 		in, out := &in.Replicas, &out.Replicas
 		*out = make(map[string]ReplicaStatus, len(*in))

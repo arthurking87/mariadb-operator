@@ -8923,6 +8923,14 @@ spec:
                 description: Replication is the replication current status per each
                   Pod.
                 properties:
+                  configHashes:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      ConfigHashes is the hash of the replication configuration that has been applied to each Pod.
+                      It is used to detect spec changes and reapply the replication configuration even when the
+                      replication role of the Pod has not changed.
+                    type: object
                   gtidStrictModePaused:
                     description: GtidStrictModePaused indicates that gtid_strict_mode
                       has been temporarily paused.
