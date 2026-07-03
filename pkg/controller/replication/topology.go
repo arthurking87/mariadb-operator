@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/go-logr/logr"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
@@ -243,6 +244,13 @@ func (r *singleClusterTopology) changeMaster(ctx context.Context, mariadb *maria
 
 	if retries := ptr.Deref(replication.Replica.ConnectionRetrySeconds, -1); retries != -1 {
 		changeMasterOpts = append(changeMasterOpts, sql.WithChangeMasterRetries(*replication.Replica.ConnectionRetrySeconds))
+	}
+	if replication.Replica.HeartbeatInterval != nil {
+		changeMasterOpts = append(changeMasterOpts,
+			sql.WithChangeMasterHeartbeatPeriod(int(replication.Replica.HeartbeatInterval.Round(time.Second).Seconds())))
+	}
+	if delay := ptr.Deref(replication.Replica.DelaySeconds, -1); delay != -1 {
+		changeMasterOpts = append(changeMasterOpts, sql.WithChangeMasterDelay(*replication.Replica.DelaySeconds))
 	}
 
 	changeMasterOpts = append(changeMasterOpts, opts...)

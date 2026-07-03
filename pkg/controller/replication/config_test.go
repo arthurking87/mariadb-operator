@@ -183,6 +183,44 @@ server_id=102
 			wantErr: false,
 		},
 		{
+			name: "invalid slave net timeout",
+			env: &env.PodEnvironment{
+				PodName:                    "mariadb-0",
+				MariadbName:                "mariadb",
+				MariaDBReplEnabled:         "true",
+				MariaDBReplSlaveNetTimeout: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid relay log purge",
+			env: &env.PodEnvironment{
+				PodName:                  "mariadb-0",
+				MariadbName:              "mariadb",
+				MariaDBReplEnabled:       "true",
+				MariaDBReplRelayLogPurge: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "with slave net timeout and relay log purge",
+			env: &env.PodEnvironment{
+				PodName:                    "mariadb-0",
+				MariadbName:                "mariadb",
+				MariaDBReplEnabled:         "true",
+				MariaDBReplSlaveNetTimeout: "60",
+				MariaDBReplRelayLogPurge:   "false",
+			},
+			wantConfig: `[mariadb]
+log_bin
+log_basename=mariadb
+server_id=10
+slave_net_timeout=60
+relay_log_purge=OFF
+`,
+			wantErr: false,
+		},
+		{
 			name: "all values present",
 			env: &env.PodEnvironment{
 				PodName:                            "mariadb-0",
@@ -195,6 +233,8 @@ server_id=102
 				MariaDBReplSemiSyncMasterTimeout:   "5000",
 				MariaDBReplSemiSyncMasterWaitPoint: "AFTER_SYNC",
 				MariaDBReplMasterSyncBinlog:        "1",
+				MariaDBReplSlaveNetTimeout:         "60",
+				MariaDBReplRelayLogPurge:           "true",
 			},
 			wantConfig: `[mariadb]
 log_bin
@@ -207,6 +247,8 @@ rpl_semi_sync_master_timeout=5000
 rpl_semi_sync_master_wait_point=AFTER_SYNC
 server_id=100
 sync_binlog=1
+slave_net_timeout=60
+relay_log_purge=ON
 `,
 			wantErr: false,
 		},

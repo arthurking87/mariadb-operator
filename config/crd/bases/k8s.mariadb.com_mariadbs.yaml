@@ -4949,6 +4949,11 @@ spec:
                           switchover.
                         type: integer
                     type: object
+                  relayLogPurge:
+                    description: |-
+                      RelayLogPurge determines whether relay logs are purged automatically as soon as they are no longer needed.
+                      See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#relay_log_purge
+                    type: boolean
                   replica:
                     description: ReplicaReplication is the replication configuration
                       for the replica nodes.
@@ -5317,6 +5322,12 @@ spec:
                           ConnectionRetrySeconds is the number of seconds that the replica will wait between connection retries.
                           See: https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/replication-statements/change-master-to#master_connect_retry.
                         type: integer
+                      delaySeconds:
+                        description: |-
+                          DelaySeconds deliberately delays the replica's application of events from the primary by the given number
+                          of seconds. This can be used to guard against accidental destructive statements on the primary.
+                          See: https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/replication-statements/change-master-to#master_delay
+                        type: integer
                       gtid:
                         description: |-
                           Gtid indicates which Global Transaction ID (GTID) position mode should be used when connecting a replica to the master.
@@ -5325,6 +5336,12 @@ spec:
                         enum:
                         - CurrentPos
                         - SlavePos
+                        type: string
+                      heartbeatInterval:
+                        description: |-
+                          HeartbeatInterval sets the interval between replication heartbeats. Whenever the replica's relay log is idle
+                          for longer than this interval, a heartbeat event is sent to confirm the connection is still alive.
+                          See: https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/replication-statements/change-master-to#master_heartbeat_period
                         type: string
                       maxLagSeconds:
                         description: |-
@@ -5415,6 +5432,12 @@ spec:
                       It is immutable.
                       See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#server_id
                     type: integer
+                  slaveNetTimeout:
+                    description: |-
+                      SlaveNetTimeout is the number of seconds to wait for more data from the primary/replica connection before
+                      considering it broken, aborting the read and trying to reconnect.
+                      See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#slave_net_timeout
+                    type: string
                   standaloneProbes:
                     description: |-
                       StandaloneProbes indicates whether to use the default non-HA startup and liveness probes.

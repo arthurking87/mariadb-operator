@@ -4274,6 +4274,16 @@ func (in *ReplicaReplication) DeepCopyInto(out *ReplicaReplication) {
 		*out = new(int)
 		**out = **in
 	}
+	if in.HeartbeatInterval != nil {
+		in, out := &in.HeartbeatInterval, &out.HeartbeatInterval
+		*out = new(v1.Duration)
+		**out = **in
+	}
+	if in.DelaySeconds != nil {
+		in, out := &in.DelaySeconds, &out.DelaySeconds
+		*out = new(int)
+		**out = **in
+	}
 	if in.MaxLagSeconds != nil {
 		in, out := &in.MaxLagSeconds, &out.MaxLagSeconds
 		*out = new(int)
@@ -4442,6 +4452,16 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 	if in.SyncBinlog != nil {
 		in, out := &in.SyncBinlog, &out.SyncBinlog
 		*out = new(int)
+		**out = **in
+	}
+	if in.SlaveNetTimeout != nil {
+		in, out := &in.SlaveNetTimeout, &out.SlaveNetTimeout
+		*out = new(v1.Duration)
+		**out = **in
+	}
+	if in.RelayLogPurge != nil {
+		in, out := &in.RelayLogPurge, &out.RelayLogPurge
+		*out = new(bool)
 		**out = **in
 	}
 	in.InitContainer.DeepCopyInto(&out.InitContainer)

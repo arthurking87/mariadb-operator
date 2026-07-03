@@ -104,6 +104,27 @@ MASTER_USE_GTID=CurrentPos;
 			wantErr: false,
 		},
 		{
+			name: "valid with heartbeat period and delay",
+			options: []ChangeMasterOpt{
+				WithChangeMasterHost("127.0.0.1"),
+				WithChangeMasterPort(3306),
+				WithChangeMasterCredentials("repl", "password"),
+				WithChangeMasterGtid("CurrentPos"),
+				WithChangeMasterHeartbeatPeriod(30),
+				WithChangeMasterDelay(60),
+			},
+			wantQuery: `CHANGE MASTER  TO
+MASTER_HOST='127.0.0.1',
+MASTER_PORT=3306,
+MASTER_USER='repl',
+MASTER_PASSWORD='password',
+MASTER_HEARTBEAT_PERIOD=30,
+MASTER_DELAY=60,
+MASTER_USE_GTID=CurrentPos;
+`,
+			wantErr: false,
+		},
+		{
 			name: "valid with custom connection",
 			options: []ChangeMasterOpt{
 				WithChangeMasterConnectionName("replica"),

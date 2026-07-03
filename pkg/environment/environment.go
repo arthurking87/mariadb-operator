@@ -76,6 +76,8 @@ type PodEnvironment struct {
 	MariaDBReplSemiSyncMasterTimeout   string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_TIMEOUT"`
 	MariaDBReplSemiSyncMasterWaitPoint string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_WAIT_POINT"`
 	MariaDBReplMasterSyncBinlog        string `env:"MARIADB_REPL_SYNC_BINLOG"`
+	MariaDBReplSlaveNetTimeout         string `env:"MARIADB_REPL_SLAVE_NET_TIMEOUT"`
+	MariaDBReplRelayLogPurge           string `env:"MARIADB_REPL_RELAY_LOG_PURGE"`
 
 	TLSEnabled        string `env:"TLS_ENABLED"`
 	TLSCACertPath     string `env:"TLS_CA_CERT_PATH"`
@@ -163,6 +165,44 @@ func (e *PodEnvironment) ReplSyncBinlog() (*int, error) {
 		return nil, fmt.Errorf("invalid replication master sync binlog: %w", err)
 	}
 	return &timeout, nil
+}
+
+func (e *PodEnvironment) ReplSlaveNetTimeout() (*int, error) {
+	replEnabled, err := e.IsReplEnabled()
+	if err != nil {
+		return nil, err
+	}
+	if !replEnabled {
+		return nil, errors.New("replication must be enabled")
+	}
+
+	if e.MariaDBReplSlaveNetTimeout == "" {
+		return nil, nil
+	}
+	timeout, err := strconv.Atoi(e.MariaDBReplSlaveNetTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("invalid replication slave net timeout: %w", err)
+	}
+	return &timeout, nil
+}
+
+func (e *PodEnvironment) ReplRelayLogPurge() (*bool, error) {
+	replEnabled, err := e.IsReplEnabled()
+	if err != nil {
+		return nil, err
+	}
+	if !replEnabled {
+		return nil, errors.New("replication must be enabled")
+	}
+
+	if e.MariaDBReplRelayLogPurge == "" {
+		return nil, nil
+	}
+	relayLogPurge, err := strconv.ParseBool(e.MariaDBReplRelayLogPurge)
+	if err != nil {
+		return nil, fmt.Errorf("invalid replication relay log purge: %w", err)
+	}
+	return &relayLogPurge, nil
 }
 
 func GetPodEnv(ctx context.Context) (*PodEnvironment, error) {

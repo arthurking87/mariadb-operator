@@ -47,6 +47,14 @@ func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting master sync binlog: %v", err)
 	}
+	slaveNetTimeout, err := env.ReplSlaveNetTimeout()
+	if err != nil {
+		return nil, fmt.Errorf("error getting slave net timeout: %v", err)
+	}
+	relayLogPurge, err := env.ReplRelayLogPurge()
+	if err != nil {
+		return nil, fmt.Errorf("error getting relay log purge: %v", err)
+	}
 
 	// To facilitate switchover/failover and avoid clashing with MaxScale, this configuration allows any Pod to act either as a primary or a replica.
 	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication#enabling-semisynchronous-replication
@@ -73,6 +81,12 @@ server_id={{ .ServerID }}
 {{- with .SyncBinlog }}
 sync_binlog={{ . }}
 {{- end }}
+{{- with .SlaveNetTimeout }}
+slave_net_timeout={{ . }}
+{{- end }}
+{{- with .RelayLogPurge }}
+relay_log_purge={{ . }}
+{{- end }}
 `)
 	buf := new(bytes.Buffer)
 	err = tpl.Execute(buf, struct {
@@ -83,6 +97,8 @@ sync_binlog={{ . }}
 		SemiSyncMasterTimeout   *int64
 		SemiSyncMasterWaitPoint string
 		SyncBinlog              *int
+		SlaveNetTimeout         *int
+		RelayLogPurge           string
 		ServerID                int
 	}{
 		LogName:                 env.MariadbName,
@@ -93,11 +109,23 @@ sync_binlog={{ . }}
 		SemiSyncMasterWaitPoint: env.MariaDBReplSemiSyncMasterWaitPoint,
 		ServerID:                serverID,
 		SyncBinlog:              syncBinlog,
+		SlaveNetTimeout:         slaveNetTimeout,
+		RelayLogPurge:           relayLogPurgeString(relayLogPurge),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func relayLogPurgeString(relayLogPurge *bool) string {
+	if relayLogPurge == nil {
+		return ""
+	}
+	if *relayLogPurge {
+		return "ON"
+	}
+	return "OFF"
 }
 
 func gtidDomainID(rawGtidDomainID string) (*int, error) {

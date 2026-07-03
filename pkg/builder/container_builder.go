@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"time"
 
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	agentresources "github.com/mariadb-operator/mariadb-operator/v26/pkg/agent/resources"
@@ -612,6 +613,18 @@ func mariadbReplEnv(mariadb *mariadbv1alpha1.MariaDB) ([]corev1.EnvVar, error) {
 		env = append(env, corev1.EnvVar{
 			Name:  "MARIADB_REPL_SYNC_BINLOG",
 			Value: fmt.Sprintf("%d", *replication.SyncBinlog),
+		})
+	}
+	if replication.SlaveNetTimeout != nil {
+		env = append(env, corev1.EnvVar{
+			Name:  "MARIADB_REPL_SLAVE_NET_TIMEOUT",
+			Value: fmt.Sprint(int(replication.SlaveNetTimeout.Round(time.Second).Seconds())),
+		})
+	}
+	if replication.RelayLogPurge != nil {
+		env = append(env, corev1.EnvVar{
+			Name:  "MARIADB_REPL_RELAY_LOG_PURGE",
+			Value: fmt.Sprint(*replication.RelayLogPurge),
 		})
 	}
 	return env, nil

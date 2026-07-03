@@ -1014,12 +1014,14 @@ func (c Client) HasConnectedReplicas(ctx context.Context) (bool, error) {
 
 type ChangeMasterOpts struct {
 	ReplicationOpts
-	Host     string
-	Port     int32
-	User     string
-	Password string
-	Gtid     string
-	Retries  int
+	Host            string
+	Port            int32
+	User            string
+	Password        string
+	Gtid            string
+	Retries         int
+	HeartbeatPeriod int
+	Delay           int
 
 	SSLEnabled  bool
 	SSLCertPath string
@@ -1063,6 +1065,18 @@ func WithChangeMasterGtid(gtid string) ChangeMasterOpt {
 func WithChangeMasterRetries(retries int) ChangeMasterOpt {
 	return func(cmo *ChangeMasterOpts) {
 		cmo.Retries = retries
+	}
+}
+
+func WithChangeMasterHeartbeatPeriod(seconds int) ChangeMasterOpt {
+	return func(cmo *ChangeMasterOpts) {
+		cmo.HeartbeatPeriod = seconds
+	}
+}
+
+func WithChangeMasterDelay(seconds int) ChangeMasterOpt {
+	return func(cmo *ChangeMasterOpts) {
+		cmo.Delay = seconds
 	}
 }
 
@@ -1118,6 +1132,12 @@ MASTER_USER='{{ .User }}',
 MASTER_PASSWORD='{{ .Password }}',
 {{- with .Retries }}
 MASTER_CONNECT_RETRY={{ . }},
+{{- end }}
+{{- with .HeartbeatPeriod }}
+MASTER_HEARTBEAT_PERIOD={{ . }},
+{{- end }}
+{{- with .Delay }}
+MASTER_DELAY={{ . }},
 {{- end }}
 MASTER_USE_GTID={{ .Gtid }};
 `)

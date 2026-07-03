@@ -161,6 +161,18 @@ type ReplicaReplication struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
 	ConnectionRetrySeconds *int `json:"connectionRetrySeconds,omitempty"`
+	// HeartbeatInterval sets the interval between replication heartbeats. Whenever the replica's relay log is idle
+	// for longer than this interval, a heartbeat event is sent to confirm the connection is still alive.
+	// See: https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/replication-statements/change-master-to#master_heartbeat_period
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	HeartbeatInterval *metav1.Duration `json:"heartbeatInterval,omitempty"`
+	// DelaySeconds deliberately delays the replica's application of events from the primary by the given number
+	// of seconds. This can be used to guard against accidental destructive statements on the primary.
+	// See: https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/replication-statements/change-master-to#master_delay
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
+	DelaySeconds *int `json:"delaySeconds,omitempty"`
 	// MaxLagSeconds is the maximum number of seconds that replicas are allowed to lag behind the primary.
 	// If a replica exceeds this threshold, it is marked as not ready and read queries will no longer be forwarded to it.
 	// If not provided, it defaults to 0, which means that replicas are not allowed to lag behind the primary (recommended).
@@ -288,6 +300,17 @@ type ReplicationSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
 	SyncBinlog *int `json:"syncBinlog,omitempty"`
+	// SlaveNetTimeout is the number of seconds to wait for more data from the primary/replica connection before
+	// considering it broken, aborting the read and trying to reconnect.
+	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#slave_net_timeout
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SlaveNetTimeout *metav1.Duration `json:"slaveNetTimeout,omitempty"`
+	// RelayLogPurge determines whether relay logs are purged automatically as soon as they are no longer needed.
+	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#relay_log_purge
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
+	RelayLogPurge *bool `json:"relayLogPurge,omitempty"`
 	// InitContainer is an init container that runs in the MariaDB Pod and co-operates with mariadb-operator.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
