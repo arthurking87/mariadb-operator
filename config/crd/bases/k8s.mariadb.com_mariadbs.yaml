@@ -5450,6 +5450,12 @@ spec:
                       pairs.
                     type: object
                 type: object
+              revisionHistoryLimit:
+                description: |-
+                  RevisionHistoryLimit is the number of old ControllerRevisions retained by the StatefulSet for rollback.
+                  If unset, it defaults to the Kubernetes API default (10).
+                format: int32
+                type: integer
               rootEmptyPassword:
                 description: RootEmptyPassword indicates if the root password should
                   be empty. Don't use this feature in production, it is only intended

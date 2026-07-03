@@ -764,6 +764,11 @@ type MariaDBSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	UpdateStrategy UpdateStrategy `json:"updateStrategy,omitempty"`
+	// RevisionHistoryLimit is the number of old ControllerRevisions retained by the StatefulSet for rollback.
+	// If unset, it defaults to the Kubernetes API default (10).
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
 	// Service defines a template to configure the general Service object.
 	// The network traffic of this Service will be routed to all Pods.
 	// +optional

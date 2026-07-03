@@ -2372,6 +2372,11 @@ func (in *MariaDBSpec) DeepCopyInto(out *MariaDBSpec) {
 		(*in).DeepCopyInto(*out)
 	}
 	in.UpdateStrategy.DeepCopyInto(&out.UpdateStrategy)
+	if in.RevisionHistoryLimit != nil {
+		in, out := &in.RevisionHistoryLimit, &out.RevisionHistoryLimit
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Service != nil {
 		in, out := &in.Service, &out.Service
 		*out = new(ServiceTemplate)
@@ -3056,6 +3061,11 @@ func (in *MaxScaleSpec) DeepCopyInto(out *MaxScaleSpec) {
 		in, out := &in.UpdateStrategy, &out.UpdateStrategy
 		*out = new(appsv1.StatefulSetUpdateStrategy)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.RevisionHistoryLimit != nil {
+		in, out := &in.RevisionHistoryLimit, &out.RevisionHistoryLimit
+		*out = new(int32)
+		**out = **in
 	}
 	if in.KubernetesService != nil {
 		in, out := &in.KubernetesService, &out.KubernetesService

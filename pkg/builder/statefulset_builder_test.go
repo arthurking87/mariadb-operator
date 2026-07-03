@@ -449,6 +449,59 @@ func TestMariaDBUpdateStrategy(t *testing.T) {
 	}
 }
 
+func TestMariaDBRevisionHistoryLimit(t *testing.T) {
+	builder := newDefaultTestBuilder(t)
+	objMeta := metav1.ObjectMeta{
+		Name: "mariadb-obj",
+	}
+	key := types.NamespacedName{
+		Name: "mariadb-obj",
+	}
+	tests := []struct {
+		name      string
+		mariadb   *mariadbv1alpha1.MariaDB
+		wantLimit *int32
+	}{
+		{
+			name: "unset defers to the Kubernetes API default",
+			mariadb: &mariadbv1alpha1.MariaDB{
+				ObjectMeta: objMeta,
+				Spec: mariadbv1alpha1.MariaDBSpec{
+					UpdateStrategy: mariadbv1alpha1.UpdateStrategy{
+						Type: mariadbv1alpha1.ReplicasFirstPrimaryLastUpdateType,
+					},
+				},
+			},
+			wantLimit: nil,
+		},
+		{
+			name: "explicit value is propagated",
+			mariadb: &mariadbv1alpha1.MariaDB{
+				ObjectMeta: objMeta,
+				Spec: mariadbv1alpha1.MariaDBSpec{
+					RevisionHistoryLimit: ptr.To(int32(3)),
+					UpdateStrategy: mariadbv1alpha1.UpdateStrategy{
+						Type: mariadbv1alpha1.ReplicasFirstPrimaryLastUpdateType,
+					},
+				},
+			},
+			wantLimit: ptr.To(int32(3)),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sts, err := builder.BuildMariadbStatefulSet(tt.mariadb, key, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error building MariaDB StatefulSet: %v", err)
+			}
+			if !reflect.DeepEqual(tt.wantLimit, sts.Spec.RevisionHistoryLimit) {
+				t.Errorf("expecting RevisionHistoryLimit to be:\n%v\ngot:\n%v\n", tt.wantLimit, sts.Spec.RevisionHistoryLimit)
+			}
+		})
+	}
+}
+
 func TestMariaDBPVCRetentionPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -613,6 +666,51 @@ func TestMaxScaleStatefulSetMeta(t *testing.T) {
 			}
 			assertObjectMeta(t, &sts.ObjectMeta, tt.wantMeta.Labels, tt.wantMeta.Annotations)
 			assertObjectMeta(t, &sts.Spec.Template.ObjectMeta, tt.wantPodMeta.Labels, tt.wantPodMeta.Annotations)
+		})
+	}
+}
+
+func TestMaxScaleRevisionHistoryLimit(t *testing.T) {
+	builder := newDefaultTestBuilder(t)
+	objMeta := metav1.ObjectMeta{
+		Name: "maxscale-obj",
+	}
+	key := types.NamespacedName{
+		Name: "maxscale-obj",
+	}
+	tests := []struct {
+		name      string
+		maxscale  *mariadbv1alpha1.MaxScale
+		wantLimit *int32
+	}{
+		{
+			name: "unset defers to the Kubernetes API default",
+			maxscale: &mariadbv1alpha1.MaxScale{
+				ObjectMeta: objMeta,
+			},
+			wantLimit: nil,
+		},
+		{
+			name: "explicit value is propagated",
+			maxscale: &mariadbv1alpha1.MaxScale{
+				ObjectMeta: objMeta,
+				Spec: mariadbv1alpha1.MaxScaleSpec{
+					RevisionHistoryLimit: ptr.To(int32(3)),
+				},
+			},
+			wantLimit: ptr.To(int32(3)),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sts, err := builder.BuildMaxscaleStatefulSet(tt.maxscale, key, nil)
+			if err != nil {
+				t.Fatalf("unexpected error building MaxScale StatefulSet: %v", err)
+			}
+			if !reflect.DeepEqual(tt.wantLimit, sts.Spec.RevisionHistoryLimit) {
+				t.Errorf("expecting RevisionHistoryLimit to be:\n%v\ngot:\n%v\n", tt.wantLimit, sts.Spec.RevisionHistoryLimit)
+			}
 		})
 	}
 }

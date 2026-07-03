@@ -1882,6 +1882,12 @@ spec:
                       pairs.
                     type: object
                 type: object
+              revisionHistoryLimit:
+                description: |-
+                  RevisionHistoryLimit is the number of old ControllerRevisions retained by the StatefulSet for rollback.
+                  If unset, it defaults to the Kubernetes API default (10).
+                format: int32
+                type: integer
               securityContext:
                 description: SecurityContext holds security configuration that will
                   be applied to a container.

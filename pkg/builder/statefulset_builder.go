@@ -108,6 +108,7 @@ func (b *Builder) BuildMariadbStatefulSet(mariadb *mariadbv1alpha1.MariaDB, key 
 			Replicas:                             &mariadb.Spec.Replicas,
 			PodManagementPolicy:                  appsv1.ParallelPodManagement,
 			UpdateStrategy:                       *updateStrategy,
+			RevisionHistoryLimit:                 mariadb.Spec.RevisionHistoryLimit,
 			PersistentVolumeClaimRetentionPolicy: pvcRetentionPolicy,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selectorLabels,
@@ -156,10 +157,11 @@ func (b *Builder) BuildMaxscaleStatefulSet(maxscale *mariadbv1alpha1.MaxScale, k
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: objMeta,
 		Spec: appsv1.StatefulSetSpec{
-			ServiceName:         maxscale.InternalServiceKey().Name,
-			Replicas:            &maxscale.Spec.Replicas,
-			PodManagementPolicy: appsv1.ParallelPodManagement,
-			UpdateStrategy:      statefulSetUpdateStrategy(maxscale.Spec.UpdateStrategy),
+			ServiceName:          maxscale.InternalServiceKey().Name,
+			Replicas:             &maxscale.Spec.Replicas,
+			PodManagementPolicy:  appsv1.ParallelPodManagement,
+			UpdateStrategy:       statefulSetUpdateStrategy(maxscale.Spec.UpdateStrategy),
+			RevisionHistoryLimit: maxscale.Spec.RevisionHistoryLimit,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selectorLabels,
 			},

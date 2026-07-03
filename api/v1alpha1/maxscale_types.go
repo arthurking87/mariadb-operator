@@ -721,6 +721,11 @@ type MaxScaleSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:updateStrategy","urn:alm:descriptor:com.tectonic.ui:advanced"}
 	UpdateStrategy *appsv1.StatefulSetUpdateStrategy `json:"updateStrategy,omitempty"`
+	// RevisionHistoryLimit is the number of old ControllerRevisions retained by the StatefulSet for rollback.
+	// If unset, it defaults to the Kubernetes API default (10).
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
 	// KubernetesService defines a template for a Kubernetes Service object to connect to MaxScale.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec

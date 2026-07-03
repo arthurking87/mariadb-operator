@@ -1486,6 +1486,7 @@ _Appears in:_
 | `servicePorts` _[ServicePort](#serviceport) array_ | ServicePorts is the list of additional named ports to be added to the Services created by the operator. |  |  |
 | `podDisruptionBudget` _[PodDisruptionBudget](#poddisruptionbudget)_ | PodDisruptionBudget defines the budget for replica availability. |  |  |
 | `updateStrategy` _[UpdateStrategy](#updatestrategy)_ | UpdateStrategy defines how a MariaDB resource is updated. |  |  |
+| `revisionHistoryLimit` _integer_ | RevisionHistoryLimit is the number of old ControllerRevisions retained by the StatefulSet for rollback.<br />If unset, it defaults to the Kubernetes API default (10). |  |  |
 | `service` _[ServiceTemplate](#servicetemplate)_ | Service defines a template to configure the general Service object.<br />The network traffic of this Service will be routed to all Pods. |  |  |
 | `connection` _[ConnectionTemplate](#connectiontemplate)_ | Connection defines a template to configure the general Connection object.<br />This Connection provides the initial User access to the initial Database.<br />It will make use of the Service to route network traffic to all Pods. |  |  |
 | `primaryService` _[ServiceTemplate](#servicetemplate)_ | PrimaryService defines a template to configure the primary Service object.<br />The network traffic of this Service will be routed to the primary Pod. |  |  |
@@ -1861,6 +1862,7 @@ _Appears in:_
 | `replicas` _integer_ | Replicas indicates the number of desired instances. | 1 |  |
 | `podDisruptionBudget` _[PodDisruptionBudget](#poddisruptionbudget)_ | PodDisruptionBudget defines the budget for replica availability. |  |  |
 | `updateStrategy` _[StatefulSetUpdateStrategy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#statefulsetupdatestrategy-v1-apps)_ | UpdateStrategy defines the update strategy for the StatefulSet object. |  |  |
+| `revisionHistoryLimit` _integer_ | RevisionHistoryLimit is the number of old ControllerRevisions retained by the StatefulSet for rollback.<br />If unset, it defaults to the Kubernetes API default (10). |  |  |
 | `kubernetesService` _[ServiceTemplate](#servicetemplate)_ | KubernetesService defines a template for a Kubernetes Service object to connect to MaxScale. |  |  |
 | `guiKubernetesService` _[ServiceTemplate](#servicetemplate)_ | GuiKubernetesService defines a template for a Kubernetes Service object to connect to MaxScale's GUI. |  |  |
 | `requeueInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#duration-v1-meta)_ | RequeueInterval is used to perform requeue reconciliations. If not defined, it defaults to 10s. |  |  |
