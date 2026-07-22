@@ -4,6 +4,13 @@
 > 已關閉的 issue 不列入（含已確認不需修正、修法錯誤被打回、epic 拆分等）。
 > A 類 15 個已針對現有程式碼逐一查證（2026-07-03），詳見下方分析。
 
+## 2026-07-22 更新
+
+- **#15 已關閉（2026-07-13，非本次會話）**：PR #95 範圍（`slaveNetTimeout`/`relayLogPurge`/`heartbeatInterval`/`delaySeconds` 全部開放設定）被判定維護面過大，關閉不合併；改開更收斂的 **#97** 作為後續。#97 目前 OPEN、尚無對應 PR、尚未查證，範圍縮小到 3 個 knob：`server_id` 改為可選（不強制計算）、semi-sync 改成不對稱（`slave_enabled=ON` / `master_enabled=OFF`）、新增 `innodb_flush_log_at_trx_commit`。
+- **#23 已關閉（本次會話）**：對應 PR #91（`RevisionHistoryLimit`）評估後認為只是新增一個目前沒有明確需求的可選欄位、並非修復實際錯誤，且 issue 裡 annotation 那部分的訴求本來就查無實據，決定不合併、留言記錄後關閉 issue 與 PR。
+- **#64 對應的 PR #65 已完成實機驗證**：在 KIND 叢集（namespace `test1`）上實際部署此分支、建立 3-replica replication 叢集，用「複寫落後到不可能追上」（`PURGE BINARY LOGS` 造成 `Slave_IO_Errno 1236`）的情境觸發 switchover，確認：明確設定 `switchoverTimeout: 30s` 時約 34.7s 後自動中止並回復；不設定時預設值確實是 60s，且約 62s 後自動中止並回復；兩次原 primary 都維持可寫入、無卡死。詳細測試報告已貼在 [PR #65 留言](https://github.com/arthurking87/mariadb-operator/pull/65#issuecomment-5041458537)。這顆信心度大幅提升，建議在 B 類優先合併。
+- 下方 A-1／A-2／B 等區塊的表格內容維持 07-03 當天的原始分析紀錄（含已經過時的部分），未逐條改寫；請以本更新區塊 + 表格旁的即時註記為準。
+
 ## 摘要
 
 | 分類 | 數量 |
@@ -38,9 +45,9 @@
 | #8 | [#92](https://github.com/arthurking87/mariadb-operator/pull/92) |
 | #10 | [#93](https://github.com/arthurking87/mariadb-operator/pull/93) |
 | #11 | [#94](https://github.com/arthurking87/mariadb-operator/pull/94) |
-| #15 | [#95](https://github.com/arthurking87/mariadb-operator/pull/95) |
+| #15 | ~~[#95](https://github.com/arthurking87/mariadb-operator/pull/95)~~ — **已關閉不合併（2026-07-13）**，範圍過大；後續改開 [#97](https://github.com/arthurking87/mariadb-operator/issues/97)（尚未查證） |
 | #16 | 暫緩（無現成呼叫點，避免產生 dead code） |
-| #23 | [#91](https://github.com/arthurking87/mariadb-operator/pull/91) |
+| #23 | ~~[#91](https://github.com/arthurking87/mariadb-operator/pull/91)~~ — **issue 與 PR 皆已關閉（2026-07-22）**，判定為非必要的新增欄位，非修復實際錯誤 |
 
 **[#8](https://github.com/arthurking87/mariadb-operator/issues/8) — Sync primary/replica config on every reconcile, not only on switchover**
 `pkg/controller/replication/controller.go:255-260` 的 `ReconcileReplicationInPod` 只要 `Status.Replication.Roles[pod]` 已經是 `Replica`/`Primary`，就會直接跳過 `ConfigureReplica`/`ConfigurePrimary`，而這個角色判斷完全來自即時 DB 狀態（`mariadb_controller_status.go:138-169`），跟 `spec.replication` 有沒有變更無關。結論：使用者改了 `connectionRetrySeconds`、`syncTimeout`、`gtid` 等欄位，但角色沒變時，改動會被靜默忽略，要等下一次 switchover/pod 重建才生效。
@@ -140,7 +147,7 @@
 | [41](https://github.com/arthurking87/mariadb-operator/issues/41) | StatefulSet 並行更新狀態不一致 | [#59](https://github.com/arthurking87/mariadb-operator/pull/59) |
 | [42](https://github.com/arthurking87/mariadb-operator/issues/42) | 卡住 reconciliation 的 bypass pod 機制 | [#90](https://github.com/arthurking87/mariadb-operator/pull/90) |
 | [48](https://github.com/arthurking87/mariadb-operator/issues/48) | database/grant/user controller 通用修正 | [#61](https://github.com/arthurking87/mariadb-operator/pull/61) |
-| [64](https://github.com/arthurking87/mariadb-operator/issues/64) | switchover 無 timeout/circuit breaker | [#65](https://github.com/arthurking87/mariadb-operator/pull/65) |
+| [64](https://github.com/arthurking87/mariadb-operator/issues/64) | switchover 無 timeout/circuit breaker | [#65](https://github.com/arthurking87/mariadb-operator/pull/65) ✅ 2026-07-22 已在 KIND 實機驗證通過（見上方更新區塊），信心度高 |
 | [66](https://github.com/arthurking87/mariadb-operator/issues/66) | LeaderElectionID 寫死導致 Lease 衝突 | [#67](https://github.com/arthurking87/mariadb-operator/pull/67) |
 | [73](https://github.com/arthurking87/mariadb-operator/issues/73) | secondary-svc 是否移除 not-ready endpoint | [#85](https://github.com/arthurking87/mariadb-operator/pull/85)（純文件澄清，非 bug） |
 | [74](https://github.com/arthurking87/mariadb-operator/issues/74) | predicate.go 過濾事件 metrics | [#86](https://github.com/arthurking87/mariadb-operator/pull/86) |
@@ -155,7 +162,7 @@
 
 ## 建議優先處理順序
 
-1. **A-1 的 6 個（#8, #10, #11, #15, #16, #23）**：查證後確認是真的缺口，且範圍都已經收斂到具體檔案/函式，可以直接開 PR。
+1. **A-1 的 6 個（#8, #10, #11, #15, #16, #23）**：查證後確認是真的缺口，且範圍都已經收斂到具體檔案/函式，可以直接開 PR。**（更新：#15、#23 已雙雙關閉不採用，見上方 2026-07-22 更新；實際只剩 #8/#10/#11 走完 PR、#16 暫緩）**
 2. **A-6 的 #46**：範圍已收斂到 `mariadb_controller_status.go:34-37` 一處，順手可以跟 A-1 一起處理。
 3. **A-2 的 4 個（#14, #17, #19, #21）**：建議直接關閉或改寫成更精準的新 issue，不要再排進開發排程。
 4. **A-3 的 #27**：先跟回報者要重現步驟，不要盲目動工。

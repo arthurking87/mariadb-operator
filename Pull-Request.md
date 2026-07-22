@@ -3,17 +3,29 @@
 > 產生日期：2026-07-02。所有 PR 的 base 分支均為 `release`。
 > CI 欄位為產生當下的快照；處理進度請看最下方的「處理順序」。
 
+## 2026-07-22 更新
+
+- 本次更新為止**沒有任何 PR 真正 merge**（`gh pr list --state merged` 為空），下面所有「處理順序」的審查結論都還沒被實際套用到 `release`。
+- 原表只涵蓋 07-02 當天存在的 24 個 PR（#49~#90）。07-03 之後由 `Issue.md` A-1 分析衍生出的 **#91~#95** 當時還不存在，現已補進表格；另有一個與 issue 修復無關的維運性 PR **#98**（CodeRabbit 設定）獨立列出。
+- **#91（對應 #23）已關閉不合併**：評估後認為只是新增一個沒有明確需求的可選欄位，issue 裡 annotation 那部分訴求也查無實據，記錄後關閉 issue + PR。
+- **#95（對應 #15）已關閉不合併（2026-07-13，非本次會話）**：範圍（開放 4 個 replication 變數）被判定維護面過大；後續改開更收斂的 #97（尚無對應 PR）。
+- **#65（對應 #64）已完成 KIND 實機驗證**：部署到測試叢集、用「複寫落後到不可能追上」（`PURGE BINARY LOGS`）情境觸發 switchover，確認明確設定 30s 與預設 60s 兩種情況下都會在時限後自動中止並回復 primary、原 primary 維持可寫入。這是目前 25 個 OPEN PR 裡**唯一有實機驗證**、非僅程式碼審查的一個，建議提升到優先合併順位。詳細報告見 [PR #65 留言](https://github.com/arthurking87/mariadb-operator/pull/65#issuecomment-5041458537)。
+- #92/#93/#94（對應 #8/#10/#11）目前**只有 CI 通過，尚未做過本檔案風格的逐行程式碼審查**，處理優先順序上應視同「未審查」。
+
 ## OPEN PR 一覽
 
 | # | 標題 | +/- | 檔案數 | CI | Mergeable |
 |---|------|-----|-------|-----|-----------|
+| [98](https://github.com/arthurking87/mariadb-operator/pull/98) | chore: 啟用 CodeRabbit 自動 review（非 issue 修復，維運性變更） | +3/-0 | 1 | ✅ PASS | ✅ |
+| [94](https://github.com/arthurking87/mariadb-operator/pull/94) | fix(#11): 預設 preStop hook + 明確 TerminationGracePeriodSeconds | +98/-6 | 7 | ✅ PASS | ✅ |
+| [93](https://github.com/arthurking87/mariadb-operator/pull/93) | fix(#10): 調整 leader election lease 時序 + 新增 readyz check | +50/-7 | 2 | ✅ PASS | ✅ |
+| [92](https://github.com/arthurking87/mariadb-operator/pull/92) | fix(#8): spec 變更但角色未變時也要 reapply replication config | +193/-2 | 7 | ✅ PASS | ✅ |
 | [90](https://github.com/arthurking87/mariadb-operator/pull/90) | feat(update): bypass annotation 解除卡住的 rolling update | +11/-0 | 2 | ✅ PASS | ✅ |
 | [89](https://github.com/arthurking87/mariadb-operator/pull/89) | fix(replication): 刪除 NotReady primary Pod 強制斷線重連 | +8/-0 | 1 | ✅ PASS | ✅ |
 | [88](https://github.com/arthurking87/mariadb-operator/pull/88) | fix(replication): 無 failover 候選時退回目前 primary | +14/-1 | 2 | ✅ PASS | ✅ |
 | [87](https://github.com/arthurking87/mariadb-operator/pull/87) | fix(replication): switchover 失敗時回滾 primary lock/read-only | +37/-0 | 1 | ✅ PASS | ✅ |
 | [86](https://github.com/arthurking87/mariadb-operator/pull/86) | feat(predicate): 過濾事件 metrics + mariadbReplRegex helper | +104/-10 | 3 | ✅ PASS | ✅ |
 | [85](https://github.com/arthurking87/mariadb-operator/pull/85) | docs(endpoints): 回答 #73（secondary-svc 不移除 not-ready endpoints） | +5/-0 | 1 | ✅ PASS | ✅ |
-| [84](https://github.com/arthurking87/mariadb-operator/pull/84) | feat(replication): ResetMaster 改為 opt-in | 0/0 | 0 | ✅ PASS | ✅ |
 | [83](https://github.com/arthurking87/mariadb-operator/pull/83) | feat(sql): 新增 ResetReplica（現代 RESET REPLICA 語法） | +20/-0 | 1 | ✅ PASS | ✅ |
 | [82](https://github.com/arthurking87/mariadb-operator/pull/82) | feat(sql): SQL 操作加 ping check + context timeout | +74/-12 | 1 | ✅ PASS | ✅ |
 | [71](https://github.com/arthurking87/mariadb-operator/pull/71) | fix(#38): leader-only 排程健康檢查 | +422/-1 | 5 | ✅ PASS | ✅ |
@@ -21,7 +33,7 @@
 | [69](https://github.com/arthurking87/mariadb-operator/pull/69) | fix(#34): 非密碼變更也要 reconcile User | +4/-1 | 1 | ✅ PASS | ✅ |
 | [68](https://github.com/arthurking87/mariadb-operator/pull/68) | fix(#28): configurePrimaryReplica 重置多叢集 slave 連線 | +9/-0 | 1 | ✅ PASS | ✅ |
 | [67](https://github.com/arthurking87/mariadb-operator/pull/67) | fix(#66): LeaderElectionID 可設定避免 Lease 衝突 | +24/-3 | 6 | ⚠️ PENDING/MIXED | ✅ |
-| [65](https://github.com/arthurking87/mariadb-operator/pull/65) | fix(#64): SwitchoverTimeout 中止卡死的 switchover/failover | +125/-0 | 12 | ⚠️ PENDING/MIXED | ✅ |
+| [65](https://github.com/arthurking87/mariadb-operator/pull/65) | fix(#64): SwitchoverTimeout 中止卡死的 switchover/failover ✅ 2026-07-22 KIND 實測驗證通過 | +125/-0 | 12 | ✅ PASS（僅 release job SKIPPED，正常） | ✅ |
 | [63](https://github.com/arthurking87/mariadb-operator/pull/63) | fix(#24): 修 switchover READ_ONLY 狀態、條件檢查、多餘 sleep | +7/-12 | 2 | ✅ PASS | ✅ |
 | [62](https://github.com/arthurking87/mariadb-operator/pull/62) | fix(#32): 修 waitForMariaDB timeout 與迴圈條件 | +4/-3 | 1 | ✅ PASS | ✅ |
 | [61](https://github.com/arthurking87/mariadb-operator/pull/61) | fix(#48): 修 database/grant/user controller 狀態回報與錯誤傳遞 | +198/-20 | 7 | ✅ PASS | ✅ |
@@ -40,7 +52,7 @@
 |------|----|------|------|
 | 1 | #84 | diff 為空（0/0），需先確認分支是否失效或已被 base 涵蓋 | ✅ 已查明：最後一個 commit 在 KIND 驗證後 revert 了整個改動，淨 diff 為零，為 no-op → **建議關閉** |
 | 2 | #67 | CI PENDING/MIXED，需查明測試狀態 | ✅ 虛驚：僅 release job SKIPPED（正常），其餘全綠 |
-| 3 | #65 | CI PENDING/MIXED，且改動面較大（12 檔） | ✅ 虛驚：僅 release job SKIPPED（正常），其餘全綠 |
+| 3 | #65 | CI PENDING/MIXED，且改動面較大（12 檔） | ✅ 虛驚：僅 release job SKIPPED（正常），其餘全綠。**2026-07-22 追加**：已在 KIND 實機部署驗證，`switchoverTimeout` 功能本身（含預設值 60s）行為正確，詳見 [PR 留言](https://github.com/arthurking87/mariadb-operator/pull/65#issuecomment-5041458537)。⚠️ 注意：驗證是在此分支單獨部署下進行的，**與 #87/#63/#50 的合併順序衝突（見第 11 項）尚未解決**，實際合併前仍需先處理衝突群 |
 | 4 | #52 | SQL injection 修復，安全性優先 | ✅ 已審查：2 個發現（DropDatabase 驗證會卡死 finalizer；建議改用反引號跳脫而非白名單驗證），詳見審查紀錄 |
 | 5 | #50 | +443 行大型變更（新 pkg/metrics） | ✅ 已審查：1 個語義問題（metrics 計的是 attempt 不是 switchover）+ 測試瘦身建議 |
 | 6 | #71 | +422 行大型變更（排程健康檢查） | ✅ 已審查：3 個實質問題（error label cardinality 爆炸、無 per-tick timeout、reset/scrape race）+ 5 個次要點，已留言 |
@@ -73,7 +85,14 @@
 | #90 | ✅ CONFIRMED | 壞 PVC pod CrashLoop → 觸發更新 → 加 annotation 後 3 分鐘：三個 pod 全停舊 revision、150 次 waitForReadyStatus、**0 次** annotation 檢查執行 |
 | #88 | ✅ CONFIRMED | 無候選事件觸發一次後，replica 恢復候選資格 4 分鐘內 **0 次重試**；對照組（release 舊碼）同狀態 2.5 分鐘重試 15 次 |
 | #54 | ✅ CONFIRMED（模式修正） | 升級後 operator 永久 wedge：\`Error 1934: Connection 'mariadb-operator' conflicts with existing connection ''\` 無限循環，CR Ready=True→False。非預測的雙軌複寫——MariaDB 直接拒絕同 master 第二條 channel，故障大聲但升級即癱瘓 |
+| #65 | ✅ CONFIRMED（2026-07-22，功能正確） | 3-replica 叢集上用 `PURGE BINARY LOGS` 製造不可恢復的複寫落後，觸發 switchover：明確設 30s → 34.7s 後自動中止回復；不設值（預設 60s）→ 1m1.99s 後自動中止回復。兩次原 primary 皆維持可寫入、無卡死。與前三項不同：這是**驗證功能正確**，不是抓到 bug |
 
 ## 已關閉（參考）
 
-#81（stop setting server_id）、#60（SQL clientset defer close）、#58（primary service patch）、#55（NewClientWithMariaDB guards）、#53（nil row.Close() guard）、#51（pod_replication nil guard）— 均為 CLOSED。
+#81（stop setting server_id）、#60（SQL clientset defer close）、#58（primary service patch）、#55（NewClientWithMariaDB guards）、#53（nil row.Close() guard）、#51（pod_replication nil guard）、#84（diff 為零的 no-op）— 均為 CLOSED，未 merge。
+
+**2026-07-22 新增關閉：**
+- **#91**（對應 #23，RevisionHistoryLimit）：評估後認為只是新增沒有明確需求的可選欄位，非修復實際錯誤，記錄後關閉。
+- **#95**（對應 #15，2026-07-13 關閉，非本次會話）：開放 4 個 replication 變數的範圍被判定維護面過大，關閉不合併；改開更收斂的 #97（尚無對應 PR）。
+
+> 註：`gh pr list --state merged` 目前為空——包含上表所有「LGTM」「已審查」的 PR 在內，**沒有任何一個真正 merge 進 release**，處理順序表的審查結論仍待實際套用。
