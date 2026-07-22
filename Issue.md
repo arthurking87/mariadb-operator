@@ -9,6 +9,7 @@
 - **#15 已關閉（2026-07-13，非本次會話）**：PR #95 範圍（`slaveNetTimeout`/`relayLogPurge`/`heartbeatInterval`/`delaySeconds` 全部開放設定）被判定維護面過大，關閉不合併；改開更收斂的 **#97** 作為後續。#97 目前 OPEN、尚無對應 PR、尚未查證，範圍縮小到 3 個 knob：`server_id` 改為可選（不強制計算）、semi-sync 改成不對稱（`slave_enabled=ON` / `master_enabled=OFF`）、新增 `innodb_flush_log_at_trx_commit`。
 - **#23 已關閉（本次會話）**：對應 PR #91（`RevisionHistoryLimit`）評估後認為只是新增一個目前沒有明確需求的可選欄位、並非修復實際錯誤，且 issue 裡 annotation 那部分的訴求本來就查無實據，決定不合併、留言記錄後關閉 issue 與 PR。
 - **#64 對應的 PR #65 已完成實機驗證**：在 KIND 叢集（namespace `test1`）上實際部署此分支、建立 3-replica replication 叢集，用「複寫落後到不可能追上」（`PURGE BINARY LOGS` 造成 `Slave_IO_Errno 1236`）的情境觸發 switchover，確認：明確設定 `switchoverTimeout: 30s` 時約 34.7s 後自動中止並回復；不設定時預設值確實是 60s，且約 62s 後自動中止並回復；兩次原 primary 都維持可寫入、無卡死。詳細測試報告已貼在 [PR #65 留言](https://github.com/arthurking87/mariadb-operator/pull/65#issuecomment-5041458537)。這顆信心度大幅提升，建議在 B 類優先合併。
+- **#46 已開出 PR**：[**#99**](https://github.com/arthurking87/mariadb-operator/pull/99)。範圍如 A-6 分析所述，鎖定 `mariadb_controller_status.go` 的 `reconcileStatus`／`setUpdatedCondition` 呼叫端，區分 `NotFound`（維持原本沿用零值 `sts` 的行為）跟其他 API 錯誤（現在會 return error 讓該次 reconcile 被 requeue，不再靜默把暫時性錯誤誤判成 `Ready=False`）。新增的單元測試（fake client + `interceptor.Funcs` 模擬非 NotFound 的 Get 失敗）已驗證過：拿掉修法會 FAIL，加回來會 PASS。`go build`／`go vet`／`golangci-lint`／`gofmt` 全部過（本機無 go 工具鏈，改用 golang:1.26.3-alpine3.23 docker image 驗證）。
 - 下方 A-1／A-2／B 等區塊的表格內容維持 07-03 當天的原始分析紀錄（含已經過時的部分），未逐條改寫；請以本更新區塊 + 表格旁的即時註記為準。
 
 ## 摘要
@@ -121,6 +122,7 @@
 **[#46](https://github.com/arthurking87/mariadb-operator/issues/46) — Missing edge case handling in reconciliation**
 這個 issue 描述很籠統，多數猜測的邊界情況（nil pointer on `CurrentPrimaryPodIndex`、finalizer race、StatefulSet/Pod 數量不一致）逐一查證後都已經有適當的保護，查無實據。但找到一個具體、可驗證的真實缺口：`mariadb_controller_status.go:34-37` 的 `reconcileStatus` 在 `Get` StatefulSet 失敗時，只是把 error `log` 掉，沒有用 `apierrors.IsNotFound` 區分「還沒建立」跟「API 暫時性錯誤」，之後還是直接拿零值的 `sts` 去算 `status.Replicas` 跟餵給 `SetReadyWithMariaDB`——在叢集已經正常運作、只是一次性 API 抖動/informer cache 延遲的情況下，會把健康的叢集誤判成 `Ready=False`（`StatefulSetNotReady`）。`setUpdatedCondition` 的呼叫端（同檔 93 行）也有類似的「只 log 不處理」問題。
 建議：PR 範圍鎖定在這兩處——區分 `NotFound`（沿用零值 `sts` 是刻意的，用在還沒建立的階段）跟其他 API 錯誤（應該 return error 讓這個 phase 被 requeue 重試），不要嘗試處理「所有邊界情況」這種籠統範圍。
+**狀態更新（2026-07-22）**：已依建議範圍開出 [PR #99](https://github.com/arthurking87/mariadb-operator/pull/99)，OPEN、待審查/合併。
 
 ---
 
