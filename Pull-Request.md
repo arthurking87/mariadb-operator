@@ -8,15 +8,17 @@
 - 本次更新為止**沒有任何 PR 真正 merge**（`gh pr list --state merged` 為空），下面所有「處理順序」的審查結論都還沒被實際套用到 `release`。
 - 原表只涵蓋 07-02 當天存在的 24 個 PR（#49~#90）。07-03 之後由 `Issue.md` A-1 分析衍生出的 **#91~#95** 當時還不存在，現已補進表格；另有一個與 issue 修復無關的維運性 PR **#98**（CodeRabbit 設定）獨立列出。
 - **#91（對應 #23）已關閉不合併**：評估後認為只是新增一個沒有明確需求的可選欄位，issue 裡 annotation 那部分訴求也查無實據，記錄後關閉 issue + PR。
-- **#95（對應 #15）已關閉不合併（2026-07-13，非本次會話）**：範圍（開放 4 個 replication 變數）被判定維護面過大；後續改開更收斂的 #97（尚無對應 PR）。
+- **#95（對應 #15）已關閉不合併（2026-07-13，非本次會話）**：範圍（開放 4 個 replication 變數）被判定維護面過大；後續改開更收斂的 #97，現已開出 [PR #100](https://github.com/arthurking87/mariadb-operator/pull/100)。
 - **#65（對應 #64）已完成 KIND 實機驗證**：部署到測試叢集、用「複寫落後到不可能追上」（`PURGE BINARY LOGS`）情境觸發 switchover，確認明確設定 30s 與預設 60s 兩種情況下都會在時限後自動中止並回復 primary、原 primary 維持可寫入。這是目前 25 個 OPEN PR 裡**唯一有實機驗證**、非僅程式碼審查的一個，建議提升到優先合併順位。詳細報告見 [PR #65 留言](https://github.com/arthurking87/mariadb-operator/pull/65#issuecomment-5041458537)。
 - #92/#93/#94（對應 #8/#10/#11）目前**只有 CI 通過，尚未做過本檔案風格的逐行程式碼審查**，處理優先順序上應視同「未審查」。
 - **新增 [#99](https://github.com/arthurking87/mariadb-operator/pull/99)（對應 #46）**：`reconcileStatus` 區分 StatefulSet `Get` 的 `NotFound` 跟其他 API 錯誤，避免暫時性錯誤把健康叢集誤判成 `Ready=False`。已用 fake client + `interceptor.Funcs` 寫單元測試驗證（拿掉修法會 FAIL），`go build`/`go vet`/`golangci-lint`/`gofmt` 均過。剛開出，CI 結果待確認。
+- **新增 [#100](https://github.com/arthurking87/mariadb-operator/pull/100)（對應 #97）**：新增 `autoServerId`/`semiSyncMasterEnabled`/`innodbFlushLogAtTrxCommit` 三個可選欄位。兩個布林 knob 在 CRD 預設值、env var 送出、`PodEnvironment` getter 三層都刻意預設 `true`（保留現有行為，避免任一層漏掉 defaulting 就靜默弱化 durability 或搞丟 server_id）。現有 `config_test.go`/`container_builder_test.go`/`mariadb_types_test.go` 全數不動且輸出逐位元組相同，另外新增測試覆蓋兩個 knob 關閉的情境。用 docker `golang:1.26.3-alpine3.23` 跑過 `go build`/`go vet`/`golangci-lint`/`gofmt`，並用 `setup-envtest` 抓 kubebuilder 二進位跑了 `api/v1alpha1`/`pkg/builder`/`pkg/controller/replication` 三個套件的完整 envtest 測試(全過)，也重新產生了 CRD/deepcopy/helm CRDs/docs(`deploy/charts/mariadb-operator-crds/templates/crds.yaml` 774KB，在 900KB 限制內)。
 
 ## OPEN PR 一覽
 
 | # | 標題 | +/- | 檔案數 | CI | Mergeable |
 |---|------|-----|-------|-----|-----------|
+| [100](https://github.com/arthurking87/mariadb-operator/pull/100) | feat(#97): 新增 autoServerId/semiSyncMasterEnabled/innodbFlushLogAtTrxCommit | +416/-39 | 12 | ⏳ 剛開出待確認 | ✅ |
 | [99](https://github.com/arthurking87/mariadb-operator/pull/99) | fix(#46): 區分 reconcileStatus 的 NotFound 與暫時性 API 錯誤 | +115/-4 | 2 | ⏳ 剛開出待確認 | ✅ |
 | [98](https://github.com/arthurking87/mariadb-operator/pull/98) | chore: 啟用 CodeRabbit 自動 review（非 issue 修復，維運性變更） | +3/-0 | 1 | ✅ PASS | ✅ |
 | [94](https://github.com/arthurking87/mariadb-operator/pull/94) | fix(#11): 預設 preStop hook + 明確 TerminationGracePeriodSeconds | +98/-6 | 7 | ✅ PASS | ✅ |
