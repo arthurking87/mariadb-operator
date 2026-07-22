@@ -4458,6 +4458,11 @@ spec:
                           type: object
                         type: array
                     type: object
+                  autoServerId:
+                    description: |-
+                      AutoServerID determines whether the operator should auto-compute server_id from the Pod ordinal and ServerIDStartIndex.
+                      It is enabled by default. Disable it if you manage server_id externally.
+                    type: boolean
                   enabled:
                     description: Enabled is a flag to enable replication.
                     type: boolean
@@ -4929,6 +4934,15 @@ spec:
                     required:
                     - image
                     type: object
+                  innodbFlushLogAtTrxCommit:
+                    description: |-
+                      InnodbFlushLogAtTrxCommit controls the innodb_flush_log_at_trx_commit durability/throughput trade-off.
+                      See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
+                    enum:
+                    - 0
+                    - 1
+                    - 2
+                    type: integer
                   primary:
                     description: Primary is the replication configuration for the
                       primary node.
@@ -5398,6 +5412,14 @@ spec:
                       before committing the transaction back to the client.
                       See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication
                       It is enabled by default
+                    type: boolean
+                  semiSyncMasterEnabled:
+                    description: |-
+                      SemiSyncMasterEnabled controls whether the primary blocks commits waiting for a semi-sync ACK.
+                      It requires semi-synchronous replication to be enabled. Defaults to true (symmetric semi-sync, matching
+                      MariaDB's own default). Set it to false to prioritize write throughput: a node still ACKs when acting as
+                      replica (rpl_semi_sync_slave_enabled stays ON), but never blocks commits when acting as primary
+                      (rpl_semi_sync_master_enabled=OFF).
                     type: boolean
                   semiSyncWaitPoint:
                     description: |-

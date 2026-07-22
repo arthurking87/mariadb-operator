@@ -31,21 +31,37 @@ func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting semi-sync enabled: %v", err)
 	}
+	semiSyncMasterEnabled, err := env.ReplSemiSyncMasterEnabled()
+	if err != nil {
+		return nil, fmt.Errorf("error getting semi-sync master enabled: %v", err)
+	}
 	semiSyncMasterTimeout, err := env.ReplSemiSyncMasterTimeout()
 	if err != nil {
 		return nil, fmt.Errorf("error getting semi-sync master timeout: %v", err)
+	}
+	autoServerID, err := env.ReplAutoServerID()
+	if err != nil {
+		return nil, fmt.Errorf("error getting auto server ID: %v", err)
 	}
 	serverIDStartIndex, err := serverIDStartIndex(env.MariaDBReplServerIDStartIndex)
 	if err != nil {
 		return nil, fmt.Errorf("error getting server ID start index: %v", err)
 	}
-	serverID, err := serverId(env.PodName, serverIDStartIndex)
-	if err != nil {
-		return nil, fmt.Errorf("error getting server ID: %v", err)
+	var serverID *int
+	if autoServerID {
+		id, err := serverId(env.PodName, serverIDStartIndex)
+		if err != nil {
+			return nil, fmt.Errorf("error getting server ID: %v", err)
+		}
+		serverID = &id
 	}
 	syncBinlog, err := env.ReplSyncBinlog()
 	if err != nil {
 		return nil, fmt.Errorf("error getting master sync binlog: %v", err)
+	}
+	innodbFlushLogAtTrxCommit, err := env.ReplInnodbFlushLogAtTrxCommit()
+	if err != nil {
+		return nil, fmt.Errorf("error getting innodb_flush_log_at_trx_commit: %v", err)
 	}
 
 	// To facilitate switchover/failover and avoid clashing with MaxScale, this configuration allows any Pod to act either as a primary or a replica.
@@ -60,7 +76,11 @@ gtid_strict_mode
 gtid_domain_id={{ . }}
 {{- end }}
 {{- if .SemiSyncEnabled }}
+{{- if .SemiSyncMasterEnabled }}
 rpl_semi_sync_master_enabled=ON
+{{- else }}
+rpl_semi_sync_master_enabled=OFF
+{{- end }}
 rpl_semi_sync_slave_enabled=ON
 {{- with .SemiSyncMasterTimeout }}
 rpl_semi_sync_master_timeout={{ . }}
@@ -69,30 +89,39 @@ rpl_semi_sync_master_timeout={{ . }}
 rpl_semi_sync_master_wait_point={{ . }}
 {{- end }}
 {{- end }}
-server_id={{ .ServerID }}
+{{- with .ServerID }}
+server_id={{ . }}
+{{- end }}
 {{- with .SyncBinlog }}
 sync_binlog={{ . }}
+{{- end }}
+{{- with .InnodbFlushLogAtTrxCommit }}
+innodb_flush_log_at_trx_commit={{ . }}
 {{- end }}
 `)
 	buf := new(bytes.Buffer)
 	err = tpl.Execute(buf, struct {
-		LogName                 string
-		GtidStrictMode          bool
-		GtidDomainID            *int
-		SemiSyncEnabled         bool
-		SemiSyncMasterTimeout   *int64
-		SemiSyncMasterWaitPoint string
-		SyncBinlog              *int
-		ServerID                int
+		LogName                   string
+		GtidStrictMode            bool
+		GtidDomainID              *int
+		SemiSyncEnabled           bool
+		SemiSyncMasterEnabled     bool
+		SemiSyncMasterTimeout     *int64
+		SemiSyncMasterWaitPoint   string
+		SyncBinlog                *int
+		ServerID                  *int
+		InnodbFlushLogAtTrxCommit *int
 	}{
-		LogName:                 env.MariadbName,
-		GtidStrictMode:          gtidStrictMode,
-		GtidDomainID:            gtidDomainID,
-		SemiSyncEnabled:         semiSyncEnabled,
-		SemiSyncMasterTimeout:   semiSyncMasterTimeout,
-		SemiSyncMasterWaitPoint: env.MariaDBReplSemiSyncMasterWaitPoint,
-		ServerID:                serverID,
-		SyncBinlog:              syncBinlog,
+		LogName:                   env.MariadbName,
+		GtidStrictMode:            gtidStrictMode,
+		GtidDomainID:              gtidDomainID,
+		SemiSyncEnabled:           semiSyncEnabled,
+		SemiSyncMasterEnabled:     semiSyncMasterEnabled,
+		SemiSyncMasterTimeout:     semiSyncMasterTimeout,
+		SemiSyncMasterWaitPoint:   env.MariaDBReplSemiSyncMasterWaitPoint,
+		ServerID:                  serverID,
+		SyncBinlog:                syncBinlog,
+		InnodbFlushLogAtTrxCommit: innodbFlushLogAtTrxCommit,
 	})
 	if err != nil {
 		return nil, err

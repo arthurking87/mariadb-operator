@@ -68,14 +68,17 @@ type PodEnvironment struct {
 	MariadbRootPassword string `env:"MARIADB_ROOT_PASSWORD,required"`
 	MariadbPort         string `env:"MYSQL_TCP_PORT,required"`
 
-	MariaDBReplEnabled                 string `env:"MARIADB_REPL_ENABLED"`
-	MariaDBReplGtidStrictMode          string `env:"MARIADB_REPL_GTID_STRICT_MODE"`
-	MariaDBReplGtidDomainID            string `env:"MARIADB_REPL_GTID_DOMAIN_ID"`
-	MariaDBReplServerIDStartIndex      string `env:"MARIADB_REPL_SERVER_ID_START_INDEX"`
-	MariaDBReplSemiSyncEnabled         string `env:"MARIADB_REPL_SEMI_SYNC_ENABLED"`
-	MariaDBReplSemiSyncMasterTimeout   string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_TIMEOUT"`
-	MariaDBReplSemiSyncMasterWaitPoint string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_WAIT_POINT"`
-	MariaDBReplMasterSyncBinlog        string `env:"MARIADB_REPL_SYNC_BINLOG"`
+	MariaDBReplEnabled                   string `env:"MARIADB_REPL_ENABLED"`
+	MariaDBReplGtidStrictMode            string `env:"MARIADB_REPL_GTID_STRICT_MODE"`
+	MariaDBReplGtidDomainID              string `env:"MARIADB_REPL_GTID_DOMAIN_ID"`
+	MariaDBReplServerIDStartIndex        string `env:"MARIADB_REPL_SERVER_ID_START_INDEX"`
+	MariaDBReplAutoServerID              string `env:"MARIADB_REPL_AUTO_SERVER_ID"`
+	MariaDBReplSemiSyncEnabled           string `env:"MARIADB_REPL_SEMI_SYNC_ENABLED"`
+	MariaDBReplSemiSyncMasterEnabled     string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_ENABLED"`
+	MariaDBReplSemiSyncMasterTimeout     string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_TIMEOUT"`
+	MariaDBReplSemiSyncMasterWaitPoint   string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_WAIT_POINT"`
+	MariaDBReplMasterSyncBinlog          string `env:"MARIADB_REPL_SYNC_BINLOG"`
+	MariaDBReplInnodbFlushLogAtTrxCommit string `env:"MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT"`
 
 	TLSEnabled        string `env:"TLS_ENABLED"`
 	TLSCACertPath     string `env:"TLS_CA_CERT_PATH"`
@@ -120,11 +123,31 @@ func (e *PodEnvironment) ReplGtidStrictMode() (bool, error) {
 	return strconv.ParseBool(e.MariaDBReplGtidStrictMode)
 }
 
+// ReplAutoServerID defaults to true (unlike the other Repl*Enabled getters) so that a Pod
+// which somehow doesn't get the env var set still gets the pre-existing forced server_id
+// behavior, instead of silently ending up with no server_id at all.
+func (e *PodEnvironment) ReplAutoServerID() (bool, error) {
+	if e.MariaDBReplAutoServerID == "" {
+		return true, nil
+	}
+	return strconv.ParseBool(e.MariaDBReplAutoServerID)
+}
+
 func (e *PodEnvironment) ReplSemiSyncEnabled() (bool, error) {
 	if e.MariaDBReplSemiSyncEnabled == "" {
 		return false, nil
 	}
 	return strconv.ParseBool(e.MariaDBReplSemiSyncEnabled)
+}
+
+// ReplSemiSyncMasterEnabled defaults to true (unlike the other Repl*Enabled getters) so that a
+// Pod which somehow doesn't get the env var set still gets the pre-existing symmetric semi-sync
+// behavior, instead of silently losing the primary's durability guarantee.
+func (e *PodEnvironment) ReplSemiSyncMasterEnabled() (bool, error) {
+	if e.MariaDBReplSemiSyncMasterEnabled == "" {
+		return true, nil
+	}
+	return strconv.ParseBool(e.MariaDBReplSemiSyncMasterEnabled)
 }
 
 func (e *PodEnvironment) ReplSemiSyncMasterTimeout() (*int64, error) {
@@ -163,6 +186,25 @@ func (e *PodEnvironment) ReplSyncBinlog() (*int, error) {
 		return nil, fmt.Errorf("invalid replication master sync binlog: %w", err)
 	}
 	return &timeout, nil
+}
+
+func (e *PodEnvironment) ReplInnodbFlushLogAtTrxCommit() (*int, error) {
+	replEnabled, err := e.IsReplEnabled()
+	if err != nil {
+		return nil, err
+	}
+	if !replEnabled {
+		return nil, errors.New("replication must be enabled")
+	}
+
+	if e.MariaDBReplInnodbFlushLogAtTrxCommit == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(e.MariaDBReplInnodbFlushLogAtTrxCommit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid replication innodb_flush_log_at_trx_commit: %w", err)
+	}
+	return &value, nil
 }
 
 func GetPodEnv(ctx context.Context) (*PodEnvironment, error) {

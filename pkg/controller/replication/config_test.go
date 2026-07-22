@@ -210,6 +210,116 @@ sync_binlog=1
 `,
 			wantErr: false,
 		},
+		{
+			name: "invalid auto server ID",
+			env: &env.PodEnvironment{
+				PodName:                 "mariadb-0",
+				MariadbName:             "mariadb",
+				MariaDBReplEnabled:      "true",
+				MariaDBReplAutoServerID: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "auto server ID disabled omits server_id",
+			env: &env.PodEnvironment{
+				PodName:                 "mariadb-0",
+				MariadbName:             "mariadb",
+				MariaDBReplEnabled:      "true",
+				MariaDBReplAutoServerID: "false",
+			},
+			wantConfig: `[mariadb]
+log_bin
+log_basename=mariadb
+`,
+			wantErr: false,
+		},
+		{
+			name: "auto server ID unset defaults to enabled (backward compatible)",
+			env: &env.PodEnvironment{
+				PodName:            "mariadb-3",
+				MariadbName:        "mariadb",
+				MariaDBReplEnabled: "true",
+			},
+			wantConfig: `[mariadb]
+log_bin
+log_basename=mariadb
+server_id=13
+`,
+			wantErr: false,
+		},
+		{
+			name: "invalid semi-sync master enabled",
+			env: &env.PodEnvironment{
+				PodName:                          "mariadb-0",
+				MariadbName:                      "mariadb",
+				MariaDBReplEnabled:               "true",
+				MariaDBReplSemiSyncEnabled:       "true",
+				MariaDBReplSemiSyncMasterEnabled: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "asymmetric semi-sync: master disabled, slave stays enabled",
+			env: &env.PodEnvironment{
+				PodName:                          "mariadb-0",
+				MariadbName:                      "mariadb",
+				MariaDBReplEnabled:               "true",
+				MariaDBReplSemiSyncEnabled:       "true",
+				MariaDBReplSemiSyncMasterEnabled: "false",
+			},
+			wantConfig: `[mariadb]
+log_bin
+log_basename=mariadb
+rpl_semi_sync_master_enabled=OFF
+rpl_semi_sync_slave_enabled=ON
+server_id=10
+`,
+			wantErr: false,
+		},
+		{
+			name: "semi-sync master enabled unset defaults to symmetric (backward compatible)",
+			env: &env.PodEnvironment{
+				PodName:                    "mariadb-0",
+				MariadbName:                "mariadb",
+				MariaDBReplEnabled:         "true",
+				MariaDBReplSemiSyncEnabled: "true",
+			},
+			wantConfig: `[mariadb]
+log_bin
+log_basename=mariadb
+rpl_semi_sync_master_enabled=ON
+rpl_semi_sync_slave_enabled=ON
+server_id=10
+`,
+			wantErr: false,
+		},
+		{
+			name: "invalid innodb_flush_log_at_trx_commit",
+			env: &env.PodEnvironment{
+				PodName:                              "mariadb-0",
+				MariadbName:                          "mariadb",
+				MariaDBReplEnabled:                   "true",
+				MariaDBReplInnodbFlushLogAtTrxCommit: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "with innodb_flush_log_at_trx_commit",
+			env: &env.PodEnvironment{
+				PodName:                              "mariadb-0",
+				MariadbName:                          "mariadb",
+				MariaDBReplEnabled:                   "true",
+				MariaDBReplInnodbFlushLogAtTrxCommit: "1",
+			},
+			wantConfig: `[mariadb]
+log_bin
+log_basename=mariadb
+server_id=10
+innodb_flush_log_at_trx_commit=1
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

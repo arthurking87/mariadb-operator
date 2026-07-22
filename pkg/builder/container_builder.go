@@ -586,11 +586,23 @@ func mariadbReplEnv(mariadb *mariadbv1alpha1.MariaDB) ([]corev1.EnvVar, error) {
 			Value: strconv.Itoa(*mariadb.Spec.Replication.ServerIDStartIndex),
 		})
 	}
+	if !replication.IsAutoServerIDEnabled() {
+		env = append(env, corev1.EnvVar{
+			Name:  "MARIADB_REPL_AUTO_SERVER_ID",
+			Value: fmt.Sprint(false),
+		})
+	}
 	if replication.IsSemiSyncEnabled() {
 		env = append(env, corev1.EnvVar{
 			Name:  "MARIADB_REPL_SEMI_SYNC_ENABLED",
 			Value: fmt.Sprint(true),
 		})
+		if !replication.IsSemiSyncMasterEnabled() {
+			env = append(env, corev1.EnvVar{
+				Name:  "MARIADB_REPL_SEMI_SYNC_MASTER_ENABLED",
+				Value: fmt.Sprint(false),
+			})
+		}
 		if replication.SemiSyncAckTimeout != nil {
 			env = append(env, corev1.EnvVar{
 				Name:  "MARIADB_REPL_SEMI_SYNC_MASTER_TIMEOUT",
@@ -612,6 +624,12 @@ func mariadbReplEnv(mariadb *mariadbv1alpha1.MariaDB) ([]corev1.EnvVar, error) {
 		env = append(env, corev1.EnvVar{
 			Name:  "MARIADB_REPL_SYNC_BINLOG",
 			Value: fmt.Sprintf("%d", *replication.SyncBinlog),
+		})
+	}
+	if replication.InnodbFlushLogAtTrxCommit != nil {
+		env = append(env, corev1.EnvVar{
+			Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT",
+			Value: strconv.Itoa(*replication.InnodbFlushLogAtTrxCommit),
 		})
 	}
 	return env, nil

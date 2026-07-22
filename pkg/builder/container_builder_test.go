@@ -1461,6 +1461,58 @@ func TestMariadbEnv(t *testing.T) {
 				}...),
 		},
 		{
+			name: "MariaDB replication with auto server ID and semi-sync master disabled",
+			mariadb: &mariadbv1alpha1.MariaDB{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "mariadb-repl",
+				},
+				Spec: mariadbv1alpha1.MariaDBSpec{
+					Replication: &mariadbv1alpha1.Replication{
+						Enabled: true,
+						ReplicationSpec: mariadbv1alpha1.ReplicationSpec{
+							AutoServerID:              ptr.To(false),
+							SemiSyncEnabled:           ptr.To(true),
+							SemiSyncMasterEnabled:     ptr.To(false),
+							InnodbFlushLogAtTrxCommit: ptr.To(1),
+						},
+					},
+				},
+			},
+			wantEnv: append(
+				defaultEnv([]corev1.EnvVar{
+					{
+						Name:  "MARIADB_NAME",
+						Value: "mariadb-repl",
+					},
+				}),
+				[]corev1.EnvVar{
+					{
+						Name:  "MARIADB_REPL_ENABLED",
+						Value: strconv.FormatBool(true),
+					},
+					{
+						Name:  "MARIADB_REPL_GTID_STRICT_MODE",
+						Value: strconv.FormatBool(true),
+					},
+					{
+						Name:  "MARIADB_REPL_AUTO_SERVER_ID",
+						Value: strconv.FormatBool(false),
+					},
+					{
+						Name:  "MARIADB_REPL_SEMI_SYNC_ENABLED",
+						Value: strconv.FormatBool(true),
+					},
+					{
+						Name:  "MARIADB_REPL_SEMI_SYNC_MASTER_ENABLED",
+						Value: strconv.FormatBool(false),
+					},
+					{
+						Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT",
+						Value: "1",
+					},
+				}...),
+		},
+		{
 			name: "MariaDB Galera TLS",
 			mariadb: &mariadbv1alpha1.MariaDB{
 				ObjectMeta: metav1.ObjectMeta{
