@@ -13,6 +13,17 @@
 - **#46 已開出 PR**：[**#99**](https://github.com/arthurking87/mariadb-operator/pull/99)。範圍如 A-6 分析所述，鎖定 `mariadb_controller_status.go` 的 `reconcileStatus`／`setUpdatedCondition` 呼叫端，區分 `NotFound`（維持原本沿用零值 `sts` 的行為）跟其他 API 錯誤（現在會 return error 讓該次 reconcile 被 requeue，不再靜默把暫時性錯誤誤判成 `Ready=False`）。新增的單元測試（fake client + `interceptor.Funcs` 模擬非 NotFound 的 Get 失敗）已驗證過：拿掉修法會 FAIL，加回來會 PASS。`go build`／`go vet`／`golangci-lint`／`gofmt` 全部過（本機無 go 工具鏈，改用 golang:1.26.3-alpine3.23 docker image 驗證）。
 - 下方 A-1／A-2／B 等區塊的表格內容維持 07-03 當天的原始分析紀錄（含已經過時的部分），未逐條改寫；請以本更新區塊 + 表格旁的即時註記為準。
 
+## 2026-07-24 更新
+
+- **#13、#16、#19、#27、#37、#47 已全數關閉（本次會話）**：查證後判斷都不需要修改，逐一留言記錄關閉理由後關閉。
+  - **#13**（多 CRD group 重構）：屬於需要 ADR 的架構決策，評估後判斷目前不需要，關閉不採用。
+  - **#16**（predicate trim 物件名稱後綴）：確認是真的缺口，但沒有現成呼叫點會用到，貿然加上去只會變成 dead code，關閉不處理。
+  - **#19**（webhook 加 REPLICATION MASTER ADMIN）：查證「webhook 會擋掉此權限」的前提不成立（`grant_webhook.go` 對 Privileges 無白名單檢查），目前也沒有明確需求要擴大 operator 複寫帳號權限集合，關閉不處理。
+  - **#27**（replica=1 多餘連線）：查無實據，關閉；已留言請回報者之後若能提供重現方式可重開。
+  - **#37**（排程 stop return 邏輯錯誤）：對應功能只存在未合併分支 `fix/issue-38-schedule-check`，main 上不適用，關閉；等 #38 併入 main 後如問題仍在再重開。
+  - **#47**（switchover/1+N metrics 錯誤）：`pkg/metrics/` 在 main 上不存在，只存在未合併的 PR #49 分支，關閉；PR #49 合併時會一併檢視。
+- 至此，原本列在 A 類「尚未處理」的 15 個 issue 已全部有結論：#8/#10/#11/#46 有對應 PR（#92/#93/#94/#99）、#15→#97→#100 有 PR、#14/#17/#21/#23 已關閉、#13/#16/#19/#27/#37/#47（本次）已關閉。A 類已清空，只剩下方 B 類 24 個「有 PR 待合併」的 issue 需要追蹤。
+
 ## 摘要
 
 | 分類 | 數量 |
