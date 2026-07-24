@@ -6,6 +6,10 @@ const (
 	ConditionTypeBinlogsArchived string = "BinlogsArchived"
 	ConditionTypeBinlogsReplayed string = "BinlogsReplayed"
 	ConditionTypePrimarySwitched string = "PrimarySwitched"
+	// ConditionTypeReplicationSyncing indicates that the Wait sync switchover/failover phase is
+	// currently retrying. Its LastTransitionTime anchors the cumulative Wait sync retry clock used
+	// by replication.Primary.SwitchoverTimeout, independently of the other switchover phases.
+	ConditionTypeReplicationSyncing string = "ReplicationSyncing"
 	// ConditionTypeGaleraReady indicates that the cluster is healthy.
 	ConditionTypeGaleraReady string = "GaleraReady"
 	// ConditionTypeGaleraConfigured indicates that the cluster has been successfully configured.
@@ -37,6 +41,8 @@ const (
 	ConditionReasonReplayBinlogsSkipped  string = "ReplayBinlogsSkipped"
 	ConditionReasonSwitchPrimary         string = "SwitchPrimary"
 	ConditionReasonSwitchoverTimeout     string = "SwitchoverTimeout"
+	ConditionReasonReplicationSyncing    string = "ReplicationSyncing"
+	ConditionReasonReplicationSynced     string = "ReplicationSynced"
 	ConditionReasonGaleraReady           string = "GaleraReady"
 	ConditionReasonGaleraNotReady        string = "GaleraNotReady"
 	ConditionReasonGaleraConfigured      string = "GaleraConfigured"

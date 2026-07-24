@@ -25,7 +25,17 @@ import (
 type switchoverPhase struct {
 	name      string
 	reconcile func(context.Context, *ReconcileRequest, logr.Logger) error
+	// timeout bounds a single attempt of this phase. Zero means no phase-specific bound is applied
+	// (used by the "Wait sync" phase, which manages its own timeout via replication.Replica.SyncTimeout).
+	timeout time.Duration
 }
+
+// waitSyncPhaseName identifies the "Wait sync" phase, whose cumulative retry time across
+// reconciles is bounded by replication.Primary.SwitchoverTimeout, independently of the other phases.
+const waitSyncPhaseName = "Wait sync"
+
+// otherPhaseTimeout bounds a single attempt of every switchover phase other than "Wait sync".
+const otherPhaseTimeout = 10 * time.Second
 
 func isSwitchoverStale(mdb *mariadbv1alpha1.MariaDB) bool {
 	return mdb.IsSwitchingPrimary() && !mdb.IsReplicationSwitchoverRequired()
@@ -69,43 +79,63 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
 
-	if elapsed, timedOut := r.switchoverTimedOut(req.mariadb, replication); timedOut {
-		return r.abortSwitchover(ctx, req, logger, elapsed)
-	}
-
 	phases := []switchoverPhase{
 		{
 			name:      "Lock primary with read lock",
 			reconcile: r.lockPrimaryWithReadLock,
+			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      "Set read_only in primary",
 			reconcile: r.setPrimaryReadOnly,
+			timeout:   otherPhaseTimeout,
 		},
 		{
-			name:      "Wait sync",
+			name:      waitSyncPhaseName,
 			reconcile: r.waitSync,
 		},
 		{
 			name:      "Configure new primary",
 			reconcile: r.configureNewPrimary,
+			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      "Connect replicas to new primary",
 			reconcile: r.connectReplicasToNewPrimary,
+			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      "Change primary to replica",
 			reconcile: r.changePrimaryToReplica,
+			timeout:   otherPhaseTimeout,
 		},
 	}
 
 	for _, p := range phases {
-		if err := p.reconcile(ctx, req, logger.WithValues("phase", p.name)); err != nil {
+		phaseCtx := ctx
+		var cancel context.CancelFunc
+		if p.timeout > 0 {
+			phaseCtx, cancel = context.WithTimeout(ctx, p.timeout)
+		}
+		err := p.reconcile(phaseCtx, req, logger.WithValues("phase", p.name))
+		if cancel != nil {
+			cancel()
+		}
+		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return err
 			}
+			if p.name == waitSyncPhaseName {
+				return r.handleWaitSyncFailure(ctx, req, logger, replication, err)
+			}
 			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, err)
+		}
+		if p.name == waitSyncPhaseName {
+			if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+				condition.SetReplicationSynced(&req.mariadb.Status)
+			}); err != nil {
+				return fmt.Errorf("error patching MariaDB status: %v", err)
+			}
 		}
 	}
 
@@ -122,14 +152,17 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	return nil
 }
 
-// switchoverTimedOut returns the elapsed time since the switchover started and whether it
-// exceeds replication.Primary.SwitchoverTimeout. The start time is derived from the
-// ConditionTypePrimarySwitched condition, which is only set to False once, when the
-// switchover begins, and stays False across retries until it succeeds or is aborted.
-func (r *ReplicationReconciler) switchoverTimedOut(mdb *mariadbv1alpha1.MariaDB,
+// waitSyncTimedOut returns the elapsed time since the "Wait sync" phase first started failing in
+// the current switchover attempt, and whether it exceeds replication.Primary.SwitchoverTimeout.
+// The start time is derived from the ConditionTypeReplicationSyncing condition, which is only set
+// to False once, on the first Wait sync failure, and stays False across retries until Wait sync
+// succeeds or the switchover is aborted/reset (meta.SetStatusCondition only moves LastTransitionTime
+// when Status actually changes). This bounds cumulative Wait sync retry time only, not the other
+// switchover phases, which are bounded individually by otherPhaseTimeout instead.
+func (r *ReplicationReconciler) waitSyncTimedOut(mdb *mariadbv1alpha1.MariaDB,
 	replication mariadbv1alpha1.Replication) (time.Duration, bool) {
-	cond := meta.FindStatusCondition(mdb.Status.Conditions, mariadbv1alpha1.ConditionTypePrimarySwitched)
-	if cond == nil {
+	cond := meta.FindStatusCondition(mdb.Status.Conditions, mariadbv1alpha1.ConditionTypeReplicationSyncing)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
 		return 0, false
 	}
 	timeout := ptr.Deref(replication.Primary.SwitchoverTimeout, metav1.Duration{Duration: 60 * time.Second}).Duration
@@ -138,6 +171,23 @@ func (r *ReplicationReconciler) switchoverTimedOut(mdb *mariadbv1alpha1.MariaDB,
 	}
 	elapsed := time.Since(cond.LastTransitionTime.Time)
 	return elapsed, elapsed > timeout
+}
+
+// handleWaitSyncFailure is called whenever the "Wait sync" phase fails. It records the failure via
+// ConditionTypeReplicationSyncing (a no-op on retries after the first) and, once the cumulative
+// retry time exceeds replication.Primary.SwitchoverTimeout, aborts the switchover instead of
+// propagating the raw error.
+func (r *ReplicationReconciler) handleWaitSyncFailure(ctx context.Context, req *ReconcileRequest, logger logr.Logger,
+	replication mariadbv1alpha1.Replication, waitSyncErr error) error {
+	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		condition.SetReplicationSyncing(&req.mariadb.Status)
+	}); err != nil {
+		return fmt.Errorf("error patching MariaDB status: %v", err)
+	}
+	if elapsed, timedOut := r.waitSyncTimedOut(req.mariadb, replication); timedOut {
+		return r.abortSwitchover(ctx, req, logger, elapsed)
+	}
+	return fmt.Errorf("error in %s switchover reconcile phase: %v", waitSyncPhaseName, waitSyncErr)
 }
 
 // abortSwitchover gives up an in-progress switchover/failover that has exceeded its timeout.
@@ -169,6 +219,7 @@ func (r *ReplicationReconciler) abortSwitchover(ctx context.Context, req *Reconc
 
 	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
 		condition.SetPrimarySwitchoverTimeout(&req.mariadb.Status, elapsed.String())
+		condition.SetReplicationSynced(&req.mariadb.Status)
 	}); err != nil {
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
@@ -206,6 +257,7 @@ func (r *ReplicationReconciler) reconcileStaleSwitchover(ctx context.Context, re
 
 	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
 		condition.SetPrimarySwitched(&req.mariadb.Status)
+		condition.SetReplicationSynced(&req.mariadb.Status)
 	}); err != nil {
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
