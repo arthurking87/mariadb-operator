@@ -116,6 +116,26 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting new primary Pod index: %v", err)
 	}
 
+	// The old primary may still be holding application connections open (e.g. it is
+	// NotReady due to a failed health check rather than a crashed mariadbd process),
+	// which would otherwise sit until the client times out. Deleting it forces those
+	// connections closed and lets the StatefulSet recreate it cleanly as a replica.
+	//
+	// This runs before the Primary.PodIndex patch below on purpose: once that patch lands,
+	// spec.replication.primary.podIndex differs from status.currentPrimaryPodIndex, which
+	// makes shouldReconcile (via IsReplicationSwitchoverRequired) return false on the next
+	// reconcile, and hands control over to the switchover reconciler instead — so a Delete
+	// failure here would otherwise have no independent retry path. Keeping the Delete first
+	// means a transient failure just requeues this same reconcile from the top, with nothing
+	// patched yet, so it naturally retries until the Pod is actually gone.
+	//
+	// The UID precondition guards against deleting a different Pod instance than the one we
+	// observed: if the old primary was already recreated with the same name between us
+	// reading it and issuing the Delete, a name-only Delete could remove the new instance.
+	if err := r.Delete(ctx, &pod, client.Preconditions{UID: &pod.UID}); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("error deleting Pod '%s': %v", pod.Name, err)
+	}
+
 	var errBundle *multierror.Error
 	err = r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
 		mdb.Spec.Replication.Primary.PodIndex = newPrimary
@@ -134,14 +154,6 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 	logger.Info("Switching primary", "primary", primary, "new-primary", *newPrimary)
 	r.recorder.Eventf(mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitching, mariadbv1alpha1.ActionReconciling,
 		"Switching primary from index '%d' to index '%d'", *primary, *newPrimary)
-
-	// The old primary may still be holding application connections open (e.g. it is
-	// NotReady due to a failed health check rather than a crashed mariadbd process),
-	// which would otherwise sit until the client times out. Deleting it forces those
-	// connections closed and lets the StatefulSet recreate it cleanly as a replica.
-	if err := r.Delete(ctx, &pod); client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("error deleting Pod '%s': %v", pod.Name, err)
-	}
 
 	return nil
 }
