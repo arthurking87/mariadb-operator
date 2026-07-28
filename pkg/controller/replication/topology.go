@@ -90,10 +90,10 @@ func setReplicaSemiSync(ctx context.Context, client *sql.Client, mariadb *mariad
 // replica values that may have been set while the Pod was previously acting as a replica.
 func setPrimaryDurability(ctx context.Context, client *sql.Client, mariadb *mariadbv1alpha1.MariaDB) error {
 	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
-	if err := client.SetSyncBinlog(ctx, replication.SyncBinlogPrimary); err != nil {
+	if err := client.SetSyncBinlog(ctx, replication.GetSyncBinlogPrimary()); err != nil {
 		return fmt.Errorf("error setting primary sync_binlog: %v", err)
 	}
-	if err := client.SetInnodbFlushLogAtTrxCommit(ctx, replication.InnodbFlushLogAtTrxCommitPrimary); err != nil {
+	if err := client.SetInnodbFlushLogAtTrxCommit(ctx, replication.GetInnodbFlushLogAtTrxCommitPrimary()); err != nil {
 		return fmt.Errorf("error setting primary innodb_flush_log_at_trx_commit: %v", err)
 	}
 	return nil
@@ -103,10 +103,10 @@ func setPrimaryDurability(ctx context.Context, client *sql.Client, mariadb *mari
 // primary/safe values that my.cnf boots every Pod with. See pkg/controller/replication/config.go.
 func setReplicaDurability(ctx context.Context, client *sql.Client, mariadb *mariadbv1alpha1.MariaDB) error {
 	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
-	if err := client.SetSyncBinlog(ctx, replication.SyncBinlogReplica); err != nil {
+	if err := client.SetSyncBinlog(ctx, replication.GetSyncBinlogReplica()); err != nil {
 		return fmt.Errorf("error setting replica sync_binlog: %v", err)
 	}
-	if err := client.SetInnodbFlushLogAtTrxCommit(ctx, replication.InnodbFlushLogAtTrxCommitReplica); err != nil {
+	if err := client.SetInnodbFlushLogAtTrxCommit(ctx, replication.GetInnodbFlushLogAtTrxCommitReplica()); err != nil {
 		return fmt.Errorf("error setting replica innodb_flush_log_at_trx_commit: %v", err)
 	}
 	return nil

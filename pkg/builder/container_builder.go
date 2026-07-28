@@ -619,11 +619,11 @@ func mariadbReplEnv(mariadb *mariadbv1alpha1.MariaDB) ([]corev1.EnvVar, error) {
 	// off the MariaDB spec rather than through env vars, see pkg/controller/replication/topology.go.
 	env = append(env, corev1.EnvVar{
 		Name:  "MARIADB_REPL_SYNC_BINLOG_PRIMARY",
-		Value: strconv.Itoa(int(replication.SyncBinlogPrimary)),
+		Value: strconv.Itoa(int(replication.GetSyncBinlogPrimary())),
 	})
 	env = append(env, corev1.EnvVar{
 		Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT_PRIMARY",
-		Value: strconv.Itoa(int(replication.InnodbFlushLogAtTrxCommitPrimary)),
+		Value: strconv.Itoa(int(replication.GetInnodbFlushLogAtTrxCommitPrimary())),
 	})
 	return env, nil
 }

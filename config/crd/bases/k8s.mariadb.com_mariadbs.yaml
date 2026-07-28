@@ -4462,6 +4462,9 @@ spec:
                     description: |-
                       AutoServerID determines whether the operator should auto-compute server_id from the Pod ordinal and ServerIDStartIndex.
                       It is enabled by default. Disable it if you manage server_id externally.
+                      It is immutable, like ServerIDStartIndex: toggling it on a running replication cluster
+                      would change server_id underneath already-configured nodes, risking a server_id
+                      collision or replication history inconsistency.
                     type: boolean
                   enabled:
                     description: Enabled is a flag to enable replication.

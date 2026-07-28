@@ -117,7 +117,10 @@ spec:
     semiSyncEnabled: true
     semiSyncAckTimeout: 10s
     semiSyncWaitPoint: AfterCommit
-    syncBinlog: 1
+    syncBinlogPrimary: 1
+    syncBinlogReplica: 5
+    innodbFlushLogAtTrxCommitPrimary: 1
+    innodbFlushLogAtTrxCommitReplica: 2
     standaloneProbes: false
 ```
 
@@ -125,8 +128,12 @@ spec:
 - `semiSyncEnabled`: Determines whether semi-synchronous replication should be enabled. It is enabled by default. See [MariaDB documentation](https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication).
 - `semiSyncAckTimeout`: ACK timeout for the replicas to acknowledge transactions to the primary. It requires semi-synchronous replication. See [MariaDB documentation](https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication#rpl_semi_sync_master_timeout).
 - `semiSyncWaitPoint`: Determines whether the transaction should wait for an ACK after having synced the binlog (`AfterSync`) or after having committed to the storage engine (`AfterCommit`, the default). It requires semi-synchronous replication. See [MariaDB documentation](https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication#rpl_semi_sync_master_wait_point).
-- `syncBinlog`: Number of events after which the binary log is synchronized to disk. See [MariaDB documentation](https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog).
+- `syncBinlogPrimary` / `syncBinlogReplica`: Number of events after which the binary log is synchronized to disk, applied by the operator when a Pod is promoted to primary / demoted to replica respectively. Defaults to `1` for primary (durable) and `5` for replica (relaxed for throughput). See [MariaDB documentation](https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog).
+- `innodbFlushLogAtTrxCommitPrimary` / `innodbFlushLogAtTrxCommitReplica`: Controls the `innodb_flush_log_at_trx_commit` durability/throughput trade-off, applied the same way as the `syncBinlog*` fields above. Defaults to `1` for primary and `2` for replica. See [MariaDB documentation](https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit).
 - `standaloneProbes`: Determines whether to use regular non-HA startup and liveness probes. It is disabled by default.
+
+> [!NOTE]
+> `syncBinlogPrimary`/`syncBinlogReplica` and `innodbFlushLogAtTrxCommitPrimary`/`innodbFlushLogAtTrxCommitReplica` replace the single `syncBinlog` field from previous versions. See the [upgrade guide](./releases/UPGRADE_26.6.0.md) if you had `syncBinlog` set.
 
 These options are used by the operator to create a replication configuration file that is applied to all nodes in the cluster. When updating any of these options, an [update of the cluster](#updates) will be triggered in order to apply the new configuration.
 

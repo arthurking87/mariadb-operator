@@ -263,9 +263,12 @@ type ReplicationSpec struct {
 	ServerIDStartIndex *int `json:"serverIdStartIndex,omitempty" webhook:"inmutable"`
 	// AutoServerID determines whether the operator should auto-compute server_id from the Pod ordinal and ServerIDStartIndex.
 	// It is enabled by default. Disable it if you manage server_id externally.
+	// It is immutable, like ServerIDStartIndex: toggling it on a running replication cluster
+	// would change server_id underneath already-configured nodes, risking a server_id
+	// collision or replication history inconsistency.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
-	AutoServerID *bool `json:"autoServerId,omitempty"`
+	AutoServerID *bool `json:"autoServerId,omitempty" webhook:"inmutable"`
 	// SemiSyncEnabled determines whether semi-synchronous replication is enabled.
 	// Semi-synchronous replication requires that at least one replica should have sent an ACK to the primary node
 	// before committing the transaction back to the client.
@@ -295,7 +298,7 @@ type ReplicationSpec struct {
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=0
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
-	SyncBinlogPrimary int32 `json:"syncBinlogPrimary,omitempty"`
+	SyncBinlogPrimary *int32 `json:"syncBinlogPrimary,omitempty"`
 	// InnodbFlushLogAtTrxCommitPrimary controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as primary.
 	// The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
@@ -303,7 +306,7 @@ type ReplicationSpec struct {
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Enum=0;1;2
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
-	InnodbFlushLogAtTrxCommitPrimary int32 `json:"innodbFlushLogAtTrxCommitPrimary,omitempty"`
+	InnodbFlushLogAtTrxCommitPrimary *int32 `json:"innodbFlushLogAtTrxCommitPrimary,omitempty"`
 	// SyncBinlogReplica indicates after how many events the binary log is synchronized to disk while the Pod acts as a replica.
 	// The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
@@ -311,7 +314,7 @@ type ReplicationSpec struct {
 	// +kubebuilder:default=5
 	// +kubebuilder:validation:Minimum=0
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
-	SyncBinlogReplica int32 `json:"syncBinlogReplica,omitempty"`
+	SyncBinlogReplica *int32 `json:"syncBinlogReplica,omitempty"`
 	// InnodbFlushLogAtTrxCommitReplica controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as a replica.
 	// The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
@@ -319,7 +322,7 @@ type ReplicationSpec struct {
 	// +kubebuilder:default=2
 	// +kubebuilder:validation:Enum=0;1;2
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
-	InnodbFlushLogAtTrxCommitReplica int32 `json:"innodbFlushLogAtTrxCommitReplica,omitempty"`
+	InnodbFlushLogAtTrxCommitReplica *int32 `json:"innodbFlushLogAtTrxCommitReplica,omitempty"`
 	// InitContainer is an init container that runs in the MariaDB Pod and co-operates with mariadb-operator.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
@@ -350,6 +353,28 @@ func (r *Replication) IsAutoServerIDEnabled() bool {
 	return ptr.Deref(r.AutoServerID, true)
 }
 
+// GetSyncBinlogPrimary returns SyncBinlogPrimary, defaulting to 1 (matching the CRD default) if unset.
+func (r *Replication) GetSyncBinlogPrimary() int32 {
+	return ptr.Deref(r.SyncBinlogPrimary, 1)
+}
+
+// GetInnodbFlushLogAtTrxCommitPrimary returns InnodbFlushLogAtTrxCommitPrimary, defaulting to 1
+// (matching the CRD default) if unset.
+func (r *Replication) GetInnodbFlushLogAtTrxCommitPrimary() int32 {
+	return ptr.Deref(r.InnodbFlushLogAtTrxCommitPrimary, 1)
+}
+
+// GetSyncBinlogReplica returns SyncBinlogReplica, defaulting to 5 (matching the CRD default) if unset.
+func (r *Replication) GetSyncBinlogReplica() int32 {
+	return ptr.Deref(r.SyncBinlogReplica, 5)
+}
+
+// GetInnodbFlushLogAtTrxCommitReplica returns InnodbFlushLogAtTrxCommitReplica, defaulting to 2
+// (matching the CRD default) if unset.
+func (r *Replication) GetInnodbFlushLogAtTrxCommitReplica() int32 {
+	return ptr.Deref(r.InnodbFlushLogAtTrxCommitReplica, 2)
+}
+
 // Validate determines whether replication config is valid.
 func (r *Replication) Validate() error {
 	if r.IsSemiSyncEnabled() {
@@ -375,6 +400,18 @@ func (r *Replication) SetDefaults(mdb *MariaDB, env *environment.OperatorEnv) er
 	}
 	if r.AutoServerID == nil {
 		r.AutoServerID = ptr.To(true)
+	}
+	if r.SyncBinlogPrimary == nil {
+		r.SyncBinlogPrimary = ptr.To(int32(1))
+	}
+	if r.InnodbFlushLogAtTrxCommitPrimary == nil {
+		r.InnodbFlushLogAtTrxCommitPrimary = ptr.To(int32(1))
+	}
+	if r.SyncBinlogReplica == nil {
+		r.SyncBinlogReplica = ptr.To(int32(5))
+	}
+	if r.InnodbFlushLogAtTrxCommitReplica == nil {
+		r.InnodbFlushLogAtTrxCommitReplica = ptr.To(int32(2))
 	}
 	if r.StandaloneProbes == nil {
 		r.StandaloneProbes = ptr.To(false)

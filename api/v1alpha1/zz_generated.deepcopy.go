@@ -4444,6 +4444,26 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 		*out = new(WaitPoint)
 		**out = **in
 	}
+	if in.SyncBinlogPrimary != nil {
+		in, out := &in.SyncBinlogPrimary, &out.SyncBinlogPrimary
+		*out = new(int32)
+		**out = **in
+	}
+	if in.InnodbFlushLogAtTrxCommitPrimary != nil {
+		in, out := &in.InnodbFlushLogAtTrxCommitPrimary, &out.InnodbFlushLogAtTrxCommitPrimary
+		*out = new(int32)
+		**out = **in
+	}
+	if in.SyncBinlogReplica != nil {
+		in, out := &in.SyncBinlogReplica, &out.SyncBinlogReplica
+		*out = new(int32)
+		**out = **in
+	}
+	if in.InnodbFlushLogAtTrxCommitReplica != nil {
+		in, out := &in.InnodbFlushLogAtTrxCommitReplica, &out.InnodbFlushLogAtTrxCommitReplica
+		*out = new(int32)
+		**out = **in
+	}
 	in.InitContainer.DeepCopyInto(&out.InitContainer)
 	in.Agent.DeepCopyInto(&out.Agent)
 	if in.StandaloneProbes != nil {
