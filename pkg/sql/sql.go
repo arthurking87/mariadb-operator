@@ -748,9 +748,15 @@ type ReplicationOpts struct {
 
 type ReplicationOpt func(opts *ReplicationOpts)
 
+// WithConnectionName is the single funnel every ReplicationOpt-consuming method (StartSlave,
+// StopSlave, ResetSlave, ResetReplica, IsReplicationReplica, ...) uses to build the connection
+// name fragment for its SQL statement. connectionName is escaped here (doubling any embedded
+// single quotes, the standard SQL string-literal escape) so a caller can never break out of the
+// quoted literal — the only current caller passes a hardcoded constant, but this keeps every
+// consumer safe uniformly if that ever changes.
 func WithConnectionName(connectionName string) ReplicationOpt {
 	return func(opts *ReplicationOpts) {
-		opts.ConnectionName = fmt.Sprintf("'%s'", connectionName)
+		opts.ConnectionName = fmt.Sprintf("'%s'", strings.ReplaceAll(connectionName, "'", "''"))
 	}
 }
 
@@ -789,13 +795,19 @@ func (c *Client) ResetSlave(ctx context.Context, replOpts ...ReplicationOpt) err
 // syntax instead. It's a no-op if the given channel isn't currently
 // configured as a replica, so callers don't need to check beforehand.
 //
+// The replica thread for this channel must already be stopped before calling
+// this (see StopSlave/StopAllSlaves) — RESET REPLICA fails otherwise. RESET
+// REPLICA ALL additionally deletes the channel's relay logs and its
+// CHANGE MASTER TO connection information (host, credentials, GTID position),
+// not just its running state.
+//
 // ResetSlave's callers were intentionally left untouched in this change —
 // migrating them to ResetReplica is a separate decision for maintainers.
 func (c *Client) ResetReplica(ctx context.Context, replOpts ...ReplicationOpt) error {
 	opts := getReplOpts(replOpts...)
 	isReplica, err := c.IsReplicationReplica(ctx, replOpts...)
 	if err != nil {
-		return fmt.Errorf("error checking replica status: %v", err)
+		return fmt.Errorf("error checking replica status: %w", err)
 	}
 	if !isReplica {
 		return nil
@@ -904,7 +916,18 @@ func (c Client) IsReplicationPrimary(ctx context.Context) (bool, error) {
 
 func (c Client) IsReplicationReplica(ctx context.Context, replOpts ...ReplicationOpt) (bool, error) {
 	opts := getReplOpts(replOpts...)
-	return c.Exists(ctx, fmt.Sprintf("SHOW REPLICA %s STATUS", opts.ConnectionName))
+	exists, err := c.Exists(ctx, fmt.Sprintf("SHOW REPLICA %s STATUS", opts.ConnectionName))
+	if err != nil {
+		// A named channel that was never configured errors instead of returning an empty
+		// result set (MariaDB: "There is no master connection for 'xxx'") — that's a normal,
+		// expected case for callers like ResetReplica, not a real failure, so treat it as
+		// "not a replica" rather than propagating it as an error.
+		if IsConnectionNotExists(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("error checking replica status: %w", err)
+	}
+	return exists, nil
 }
 
 // IsReplicationPrimaryReplica determines if the server is both a primary and a replica, a situation that happens in the multi-cluster replication topology.

@@ -233,3 +233,36 @@ func TestRequireQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestWithConnectionName(t *testing.T) {
+	tests := []struct {
+		name           string
+		connectionName string
+		want           string
+	}{
+		{
+			name:           "default connection",
+			connectionName: "",
+			want:           "''",
+		},
+		{
+			name:           "plain name",
+			connectionName: "multi-cluster",
+			want:           "'multi-cluster'",
+		},
+		{
+			name:           "embedded single quote is escaped, not a SQL break-out",
+			connectionName: "foo' OR '1'='1",
+			want:           "'foo'' OR ''1''=''1'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := getReplOpts(WithConnectionName(tt.connectionName))
+			if diff := cmp.Diff(tt.want, opts.ConnectionName); diff != "" {
+				t.Errorf("unexpected connection name (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
