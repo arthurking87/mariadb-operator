@@ -19,6 +19,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// ErrNoFailoverCandidate indicates that no replica is currently healthy enough to be promoted,
+// as opposed to a transient error while determining candidates (e.g. failing to list Pods).
+// Callers that want to keep monitoring and retry failover on a later reconcile, instead of
+// erroring out and requeuing-with-backoff, should check for this specific error with errors.Is.
+var ErrNoFailoverCandidate = errors.New("no failover candidate found")
+
 type FailoverHandler struct {
 	client      client.Client
 	refResolver *refresolver.RefResolver
@@ -49,13 +55,13 @@ func (f *FailoverHandler) FurthestAdvancedReplica(ctx context.Context) (string, 
 		return candidates[i].name < candidates[j].name
 	})
 	if len(candidates) == 0 {
-		return "", errors.New("no promotion candidates were found")
+		return "", fmt.Errorf("%w: no promotion candidates were found", ErrNoFailoverCandidate)
 	}
 	f.logger.Info("Found promotion candidates", "candidates", getCandidateNames(candidates))
 
 	furthestAdvanced := f.furthestAdvancedCandidate(candidates)
 	if furthestAdvanced == nil {
-		return "", errors.New("no furthest advanced candidate was found")
+		return "", fmt.Errorf("%w: no furthest advanced candidate was found", ErrNoFailoverCandidate)
 	}
 	return furthestAdvanced.name, nil
 }

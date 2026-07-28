@@ -109,18 +109,25 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		log.FromContext(ctx).WithName("failover").V(1),
 	).FurthestAdvancedReplica(ctx)
 	if err != nil {
-		// FurthestAdvancedReplica already filters out replicas with a dead
-		// IO/SQL thread, unset GTID position, or relay log events still
-		// pending (see findCandidates in failover.go) — if it comes back
-		// empty, every replica is currently unhealthy too. Returning an error
-		// here would make the caller requeue-with-backoff and retry this
-		// exact same failing lookup on a tight loop. Since CurrentPrimaryFailingSince
-		// stays set, we keep monitoring and will attempt failover again on
-		// the next reconcile without erroring out in the meantime.
-		logger.Info("No viable failover candidate found, keeping current primary", "primary", *primary, "reason", err.Error())
-		r.recorder.Eventf(mariadb, nil, corev1.EventTypeWarning, mariadbv1alpha1.ReasonNoFailoverCandidate, mariadbv1alpha1.ActionReconciling,
-			"No viable failover candidate found for primary '%d': %v", *primary, err)
-		return nil
+		if errors.Is(err, replication.ErrNoFailoverCandidate) {
+			// FurthestAdvancedReplica already filters out replicas with a dead
+			// IO/SQL thread, unset GTID position, or relay log events still
+			// pending (see findCandidates in failover.go) — if it comes back
+			// empty, every replica is currently unhealthy too. Returning an error
+			// here would make the caller requeue-with-backoff and retry this
+			// exact same failing lookup on a tight loop. Since CurrentPrimaryFailingSince
+			// stays set, we keep monitoring and will attempt failover again on
+			// the next reconcile without erroring out in the meantime.
+			logger.Info("No viable failover candidate found, keeping current primary", "primary", *primary, "reason", err.Error())
+			r.recorder.Eventf(mariadb, nil, corev1.EventTypeWarning, mariadbv1alpha1.ReasonNoFailoverCandidate, mariadbv1alpha1.ActionReconciling,
+				"No viable failover candidate found for primary '%d': %v", *primary, err)
+			return nil
+		}
+		// Any other error (e.g. failing to list secondary Pods) is a transient lookup
+		// failure, not evidence that every replica is unhealthy — propagate it so the
+		// caller requeues-with-backoff and retries, instead of silently keeping the
+		// current (still failing) primary in place.
+		return fmt.Errorf("error getting promotion candidate: %v", err)
 	}
 	newPrimary, err := statefulset.PodIndex(newPrimaryName)
 	if err != nil {
