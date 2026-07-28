@@ -288,25 +288,38 @@ type ReplicationSpec struct {
 	// +kubebuilder:validation:Enum=AfterSync;AfterCommit
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	SemiSyncWaitPoint *WaitPoint `json:"semiSyncWaitPoint,omitempty"`
-	// SemiSyncMasterEnabled controls whether the primary blocks commits waiting for a semi-sync ACK.
-	// It requires semi-synchronous replication to be enabled. Defaults to true (symmetric semi-sync, matching
-	// MariaDB's own default). Set it to false to prioritize write throughput: a node still ACKs when acting as
-	// replica (rpl_semi_sync_slave_enabled stays ON), but never blocks commits when acting as primary
-	// (rpl_semi_sync_master_enabled=OFF).
-	// +optional
-	// +operator-sdk:csv:customresourcedefinitions:type=spec
-	SemiSyncMasterEnabled *bool `json:"semiSyncMasterEnabled,omitempty"`
-	// SyncBinlog indicates after how many events the binary log is synchronized to the disk.
+	// SyncBinlogPrimary indicates after how many events the binary log is synchronized to disk while the Pod acts as primary.
+	// The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
 	// +optional
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=0
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
-	SyncBinlog *int `json:"syncBinlog,omitempty"`
-	// InnodbFlushLogAtTrxCommit controls the innodb_flush_log_at_trx_commit durability/throughput trade-off.
+	SyncBinlogPrimary int32 `json:"syncBinlogPrimary,omitempty"`
+	// InnodbFlushLogAtTrxCommitPrimary controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as primary.
+	// The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
 	// +optional
+	// +kubebuilder:default=1
 	// +kubebuilder:validation:Enum=0;1;2
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
-	InnodbFlushLogAtTrxCommit *int `json:"innodbFlushLogAtTrxCommit,omitempty"`
+	InnodbFlushLogAtTrxCommitPrimary int32 `json:"innodbFlushLogAtTrxCommitPrimary,omitempty"`
+	// SyncBinlogReplica indicates after how many events the binary log is synchronized to disk while the Pod acts as a replica.
+	// The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
+	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
+	// +optional
+	// +kubebuilder:default=5
+	// +kubebuilder:validation:Minimum=0
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
+	SyncBinlogReplica int32 `json:"syncBinlogReplica,omitempty"`
+	// InnodbFlushLogAtTrxCommitReplica controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as a replica.
+	// The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
+	// See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
+	// +optional
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Enum=0;1;2
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
+	InnodbFlushLogAtTrxCommitReplica int32 `json:"innodbFlushLogAtTrxCommitReplica,omitempty"`
 	// InitContainer is an init container that runs in the MariaDB Pod and co-operates with mariadb-operator.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
@@ -337,11 +350,6 @@ func (r *Replication) IsAutoServerIDEnabled() bool {
 	return ptr.Deref(r.AutoServerID, true)
 }
 
-// IsSemiSyncMasterEnabled determines whether the primary should block commits waiting for a semi-sync ACK.
-func (r *Replication) IsSemiSyncMasterEnabled() bool {
-	return ptr.Deref(r.SemiSyncMasterEnabled, true)
-}
-
 // Validate determines whether replication config is valid.
 func (r *Replication) Validate() error {
 	if r.IsSemiSyncEnabled() {
@@ -367,9 +375,6 @@ func (r *Replication) SetDefaults(mdb *MariaDB, env *environment.OperatorEnv) er
 	}
 	if r.AutoServerID == nil {
 		r.AutoServerID = ptr.To(true)
-	}
-	if r.SemiSyncMasterEnabled == nil {
-		r.SemiSyncMasterEnabled = ptr.To(true)
 	}
 	if r.StandaloneProbes == nil {
 		r.StandaloneProbes = ptr.To(false)

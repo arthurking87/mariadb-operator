@@ -54,6 +54,64 @@ func WithResetMaster(resetMaster bool) ConfigureReplicaOpt {
 	}
 }
 
+// setPrimarySemiSync pins semi-sync to the asymmetric primary setting (master ON, slave OFF), overriding the
+// symmetric ON/ON that my.cnf boots every Pod with. See pkg/controller/replication/config.go.
+func setPrimarySemiSync(ctx context.Context, client *sql.Client, mariadb *mariadbv1alpha1.MariaDB) error {
+	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
+	if !replication.IsSemiSyncEnabled() {
+		return nil
+	}
+	if err := client.EnableSemiSyncMaster(ctx); err != nil {
+		return fmt.Errorf("error enabling semi-sync master: %v", err)
+	}
+	if err := client.DisableSemiSyncSlave(ctx); err != nil {
+		return fmt.Errorf("error disabling semi-sync slave: %v", err)
+	}
+	return nil
+}
+
+// setReplicaSemiSync pins semi-sync to the asymmetric replica setting (master OFF, slave ON), overriding the
+// symmetric ON/ON that my.cnf boots every Pod with. See pkg/controller/replication/config.go.
+func setReplicaSemiSync(ctx context.Context, client *sql.Client, mariadb *mariadbv1alpha1.MariaDB) error {
+	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
+	if !replication.IsSemiSyncEnabled() {
+		return nil
+	}
+	if err := client.DisableSemiSyncMaster(ctx); err != nil {
+		return fmt.Errorf("error disabling semi-sync master: %v", err)
+	}
+	if err := client.EnableSemiSyncSlave(ctx); err != nil {
+		return fmt.Errorf("error enabling semi-sync slave: %v", err)
+	}
+	return nil
+}
+
+// setPrimaryDurability applies the primary sync_binlog/innodb_flush_log_at_trx_commit values, overriding the
+// replica values that may have been set while the Pod was previously acting as a replica.
+func setPrimaryDurability(ctx context.Context, client *sql.Client, mariadb *mariadbv1alpha1.MariaDB) error {
+	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
+	if err := client.SetSyncBinlog(ctx, replication.SyncBinlogPrimary); err != nil {
+		return fmt.Errorf("error setting primary sync_binlog: %v", err)
+	}
+	if err := client.SetInnodbFlushLogAtTrxCommit(ctx, replication.InnodbFlushLogAtTrxCommitPrimary); err != nil {
+		return fmt.Errorf("error setting primary innodb_flush_log_at_trx_commit: %v", err)
+	}
+	return nil
+}
+
+// setReplicaDurability applies the replica sync_binlog/innodb_flush_log_at_trx_commit values, relaxing the
+// primary/safe values that my.cnf boots every Pod with. See pkg/controller/replication/config.go.
+func setReplicaDurability(ctx context.Context, client *sql.Client, mariadb *mariadbv1alpha1.MariaDB) error {
+	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
+	if err := client.SetSyncBinlog(ctx, replication.SyncBinlogReplica); err != nil {
+		return fmt.Errorf("error setting replica sync_binlog: %v", err)
+	}
+	if err := client.SetInnodbFlushLogAtTrxCommit(ctx, replication.InnodbFlushLogAtTrxCommitReplica); err != nil {
+		return fmt.Errorf("error setting replica innodb_flush_log_at_trx_commit: %v", err)
+	}
+	return nil
+}
+
 type Topology interface {
 	ConfigurePrimary(ctx context.Context, client *sql.Client) error
 	ConfigureReplica(ctx context.Context, client *sql.Client, primaryPodIndex int, replicaOpts ...ConfigureReplicaOpt) error
@@ -155,6 +213,12 @@ func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sq
 	if err := client.DisableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error disabling read_only: %v", err)
 	}
+	if err := setPrimarySemiSync(ctx, client, r.mariadb); err != nil {
+		return err
+	}
+	if err := setPrimaryDurability(ctx, client, r.mariadb); err != nil {
+		return err
+	}
 	if err := r.userSqlReconciler.reconcileReplUserSql(ctx, client); err != nil {
 		return fmt.Errorf("error reconciling replication user SQL: %v", err)
 	}
@@ -191,6 +255,12 @@ func (r *singleClusterTopology) ConfigureReplica(ctx context.Context, client *sq
 	}
 	if err := client.EnableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error enabling read_only: %v", err)
+	}
+	if err := setReplicaSemiSync(ctx, client, r.mariadb); err != nil {
+		return err
+	}
+	if err := setReplicaDurability(ctx, client, r.mariadb); err != nil {
+		return err
 	}
 	if err := r.changeMaster(ctx, r.mariadb, client, primaryPodIndex, opts.ChangeMasterOpts...); err != nil {
 		return fmt.Errorf("error changing master: %v", err)
@@ -341,6 +411,12 @@ func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, clie
 	if err := client.DisableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error disabling read_only: %v", err)
 	}
+	if err := setPrimarySemiSync(ctx, client, m.mariadb); err != nil {
+		return err
+	}
+	if err := setPrimaryDurability(ctx, client, m.mariadb); err != nil {
+		return err
+	}
 	if err := m.userSqlReconciler.reconcileReplUserSql(ctx, client); err != nil {
 		return fmt.Errorf("error reconciling replication user SQL: %v", err)
 	}
@@ -431,6 +507,12 @@ func (m *multiClusterTopology) configureSecondaryReplica(ctx context.Context, cl
 	}
 	if err := client.EnableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error enabling read_only: %v", err)
+	}
+	if err := setReplicaSemiSync(ctx, client, m.mariadb); err != nil {
+		return err
+	}
+	if err := setReplicaDurability(ctx, client, m.mariadb); err != nil {
+		return err
 	}
 	if err := m.singleCluster.changeMaster(ctx, m.mariadb, client, primaryPodIndex, opts.ChangeMasterOpts...); err != nil {
 		return fmt.Errorf("error changing master: %v", err)

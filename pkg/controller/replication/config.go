@@ -31,10 +31,6 @@ func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting semi-sync enabled: %v", err)
 	}
-	semiSyncMasterEnabled, err := env.ReplSemiSyncMasterEnabled()
-	if err != nil {
-		return nil, fmt.Errorf("error getting semi-sync master enabled: %v", err)
-	}
 	semiSyncMasterTimeout, err := env.ReplSemiSyncMasterTimeout()
 	if err != nil {
 		return nil, fmt.Errorf("error getting semi-sync master timeout: %v", err)
@@ -55,16 +51,19 @@ func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
 		}
 		serverID = &id
 	}
-	syncBinlog, err := env.ReplSyncBinlog()
+	syncBinlogPrimary, err := env.ReplSyncBinlogPrimary()
 	if err != nil {
-		return nil, fmt.Errorf("error getting master sync binlog: %v", err)
+		return nil, fmt.Errorf("error getting primary sync_binlog: %v", err)
 	}
-	innodbFlushLogAtTrxCommit, err := env.ReplInnodbFlushLogAtTrxCommit()
+	innodbFlushLogAtTrxCommitPrimary, err := env.ReplInnodbFlushLogAtTrxCommitPrimary()
 	if err != nil {
-		return nil, fmt.Errorf("error getting innodb_flush_log_at_trx_commit: %v", err)
+		return nil, fmt.Errorf("error getting primary innodb_flush_log_at_trx_commit: %v", err)
 	}
 
-	// To facilitate switchover/failover and avoid clashing with MaxScale, this configuration allows any Pod to act either as a primary or a replica.
+	// To facilitate switchover/failover and avoid clashing with MaxScale, this configuration boots every Pod into
+	// the symmetric semi-sync / primary-durability setting; the operator then narrows it to the role-appropriate
+	// setting (semi-sync master ON/slave OFF, and the replica sync_binlog/innodb_flush_log_at_trx_commit values,
+	// on replicas) at runtime as part of promoting/demoting the Pod, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication#enabling-semisynchronous-replication
 	tpl := createTpl("replication", `[mariadb]
 log_bin
@@ -76,11 +75,7 @@ gtid_strict_mode
 gtid_domain_id={{ . }}
 {{- end }}
 {{- if .SemiSyncEnabled }}
-{{- if .SemiSyncMasterEnabled }}
 rpl_semi_sync_master_enabled=ON
-{{- else }}
-rpl_semi_sync_master_enabled=OFF
-{{- end }}
 rpl_semi_sync_slave_enabled=ON
 {{- with .SemiSyncMasterTimeout }}
 rpl_semi_sync_master_timeout={{ . }}
@@ -92,36 +87,30 @@ rpl_semi_sync_master_wait_point={{ . }}
 {{- with .ServerID }}
 server_id={{ . }}
 {{- end }}
-{{- with .SyncBinlog }}
-sync_binlog={{ . }}
-{{- end }}
-{{- with .InnodbFlushLogAtTrxCommit }}
-innodb_flush_log_at_trx_commit={{ . }}
-{{- end }}
+sync_binlog={{ .SyncBinlogPrimary }}
+innodb_flush_log_at_trx_commit={{ .InnodbFlushLogAtTrxCommitPrimary }}
 `)
 	buf := new(bytes.Buffer)
 	err = tpl.Execute(buf, struct {
-		LogName                   string
-		GtidStrictMode            bool
-		GtidDomainID              *int
-		SemiSyncEnabled           bool
-		SemiSyncMasterEnabled     bool
-		SemiSyncMasterTimeout     *int64
-		SemiSyncMasterWaitPoint   string
-		SyncBinlog                *int
-		ServerID                  *int
-		InnodbFlushLogAtTrxCommit *int
+		LogName                          string
+		GtidStrictMode                   bool
+		GtidDomainID                     *int
+		SemiSyncEnabled                  bool
+		SemiSyncMasterTimeout            *int64
+		SemiSyncMasterWaitPoint          string
+		ServerID                         *int
+		SyncBinlogPrimary                int32
+		InnodbFlushLogAtTrxCommitPrimary int32
 	}{
-		LogName:                   env.MariadbName,
-		GtidStrictMode:            gtidStrictMode,
-		GtidDomainID:              gtidDomainID,
-		SemiSyncEnabled:           semiSyncEnabled,
-		SemiSyncMasterEnabled:     semiSyncMasterEnabled,
-		SemiSyncMasterTimeout:     semiSyncMasterTimeout,
-		SemiSyncMasterWaitPoint:   env.MariaDBReplSemiSyncMasterWaitPoint,
-		ServerID:                  serverID,
-		SyncBinlog:                syncBinlog,
-		InnodbFlushLogAtTrxCommit: innodbFlushLogAtTrxCommit,
+		LogName:                          env.MariadbName,
+		GtidStrictMode:                   gtidStrictMode,
+		GtidDomainID:                     gtidDomainID,
+		SemiSyncEnabled:                  semiSyncEnabled,
+		SemiSyncMasterTimeout:            semiSyncMasterTimeout,
+		SemiSyncMasterWaitPoint:          env.MariaDBReplSemiSyncMasterWaitPoint,
+		ServerID:                         serverID,
+		SyncBinlogPrimary:                syncBinlogPrimary,
+		InnodbFlushLogAtTrxCommitPrimary: innodbFlushLogAtTrxCommitPrimary,
 	})
 	if err != nil {
 		return nil, err

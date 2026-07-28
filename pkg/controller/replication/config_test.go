@@ -65,12 +65,12 @@ func TestNewReplicationConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid master sync binlog",
+			name: "invalid primary sync_binlog",
 			env: &env.PodEnvironment{
-				PodName:                     "mariadb-0",
-				MariadbName:                 "mariadb",
-				MariaDBReplEnabled:          "true",
-				MariaDBReplMasterSyncBinlog: "foo",
+				PodName:                      "mariadb-0",
+				MariadbName:                  "mariadb",
+				MariaDBReplEnabled:           "true",
+				MariaDBReplSyncBinlogPrimary: "foo",
 			},
 			wantErr: true,
 		},
@@ -85,6 +85,8 @@ func TestNewReplicationConfig(t *testing.T) {
 log_bin
 log_basename=mariadb
 server_id=10
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
@@ -102,6 +104,8 @@ log_basename=mariadb
 rpl_semi_sync_master_enabled=ON
 rpl_semi_sync_slave_enabled=ON
 server_id=10
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
@@ -114,7 +118,7 @@ server_id=10
 				MariaDBReplGtidStrictMode:          "true",
 				MariaDBReplSemiSyncEnabled:         "true",
 				MariaDBReplSemiSyncMasterWaitPoint: "AFTER_SYNC",
-				MariaDBReplMasterSyncBinlog:        "1",
+				MariaDBReplSyncBinlogPrimary:       "1",
 			},
 			wantConfig: `[mariadb]
 log_bin
@@ -125,6 +129,7 @@ rpl_semi_sync_slave_enabled=ON
 rpl_semi_sync_master_wait_point=AFTER_SYNC
 server_id=10
 sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
@@ -137,7 +142,7 @@ sync_binlog=1
 				MariaDBReplGtidStrictMode:        "true",
 				MariaDBReplSemiSyncEnabled:       "true",
 				MariaDBReplSemiSyncMasterTimeout: "5000",
-				MariaDBReplMasterSyncBinlog:      "1",
+				MariaDBReplSyncBinlogPrimary:     "1",
 			},
 			wantConfig: `[mariadb]
 log_bin
@@ -148,6 +153,7 @@ rpl_semi_sync_slave_enabled=ON
 rpl_semi_sync_master_timeout=5000
 server_id=10
 sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
@@ -164,6 +170,8 @@ log_bin
 log_basename=mariadb
 gtid_domain_id=1
 server_id=10
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
@@ -179,22 +187,25 @@ server_id=10
 log_bin
 log_basename=mariadb
 server_id=102
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
 		{
 			name: "all values present",
 			env: &env.PodEnvironment{
-				PodName:                            "mariadb-0",
-				MariadbName:                        "mariadb",
-				MariaDBReplEnabled:                 "true",
-				MariaDBReplGtidStrictMode:          "true",
-				MariaDBReplGtidDomainID:            "1",
-				MariaDBReplServerIDStartIndex:      "100",
-				MariaDBReplSemiSyncEnabled:         "true",
-				MariaDBReplSemiSyncMasterTimeout:   "5000",
-				MariaDBReplSemiSyncMasterWaitPoint: "AFTER_SYNC",
-				MariaDBReplMasterSyncBinlog:        "1",
+				PodName:                                     "mariadb-0",
+				MariadbName:                                 "mariadb",
+				MariaDBReplEnabled:                          "true",
+				MariaDBReplGtidStrictMode:                   "true",
+				MariaDBReplGtidDomainID:                     "1",
+				MariaDBReplServerIDStartIndex:               "100",
+				MariaDBReplSemiSyncEnabled:                  "true",
+				MariaDBReplSemiSyncMasterTimeout:            "5000",
+				MariaDBReplSemiSyncMasterWaitPoint:          "AFTER_SYNC",
+				MariaDBReplSyncBinlogPrimary:                "1",
+				MariaDBReplInnodbFlushLogAtTrxCommitPrimary: "2",
 			},
 			wantConfig: `[mariadb]
 log_bin
@@ -207,6 +218,7 @@ rpl_semi_sync_master_timeout=5000
 rpl_semi_sync_master_wait_point=AFTER_SYNC
 server_id=100
 sync_binlog=1
+innodb_flush_log_at_trx_commit=2
 `,
 			wantErr: false,
 		},
@@ -231,6 +243,8 @@ sync_binlog=1
 			wantConfig: `[mariadb]
 log_bin
 log_basename=mariadb
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
@@ -245,40 +259,13 @@ log_basename=mariadb
 log_bin
 log_basename=mariadb
 server_id=13
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
 		{
-			name: "invalid semi-sync master enabled",
-			env: &env.PodEnvironment{
-				PodName:                          "mariadb-0",
-				MariadbName:                      "mariadb",
-				MariaDBReplEnabled:               "true",
-				MariaDBReplSemiSyncEnabled:       "true",
-				MariaDBReplSemiSyncMasterEnabled: "foo",
-			},
-			wantErr: true,
-		},
-		{
-			name: "asymmetric semi-sync: master disabled, slave stays enabled",
-			env: &env.PodEnvironment{
-				PodName:                          "mariadb-0",
-				MariadbName:                      "mariadb",
-				MariaDBReplEnabled:               "true",
-				MariaDBReplSemiSyncEnabled:       "true",
-				MariaDBReplSemiSyncMasterEnabled: "false",
-			},
-			wantConfig: `[mariadb]
-log_bin
-log_basename=mariadb
-rpl_semi_sync_master_enabled=OFF
-rpl_semi_sync_slave_enabled=ON
-server_id=10
-`,
-			wantErr: false,
-		},
-		{
-			name: "semi-sync master enabled unset defaults to symmetric (backward compatible)",
+			name: "semi-sync enabled sets symmetric master/slave (asymmetric role-based override happens at runtime, see topology.go)",
 			env: &env.PodEnvironment{
 				PodName:                    "mariadb-0",
 				MariadbName:                "mariadb",
@@ -291,31 +278,35 @@ log_basename=mariadb
 rpl_semi_sync_master_enabled=ON
 rpl_semi_sync_slave_enabled=ON
 server_id=10
+sync_binlog=1
+innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,
 		},
 		{
-			name: "invalid innodb_flush_log_at_trx_commit",
+			name: "invalid primary innodb_flush_log_at_trx_commit",
 			env: &env.PodEnvironment{
-				PodName:                              "mariadb-0",
-				MariadbName:                          "mariadb",
-				MariaDBReplEnabled:                   "true",
-				MariaDBReplInnodbFlushLogAtTrxCommit: "foo",
+				PodName:            "mariadb-0",
+				MariadbName:        "mariadb",
+				MariaDBReplEnabled: "true",
+				MariaDBReplInnodbFlushLogAtTrxCommitPrimary: "foo",
 			},
 			wantErr: true,
 		},
 		{
-			name: "with innodb_flush_log_at_trx_commit",
+			name: "with custom primary durability settings (asymmetric role-based override happens at runtime, see topology.go)",
 			env: &env.PodEnvironment{
-				PodName:                              "mariadb-0",
-				MariadbName:                          "mariadb",
-				MariaDBReplEnabled:                   "true",
-				MariaDBReplInnodbFlushLogAtTrxCommit: "1",
+				PodName:                      "mariadb-0",
+				MariadbName:                  "mariadb",
+				MariaDBReplEnabled:           "true",
+				MariaDBReplSyncBinlogPrimary: "1",
+				MariaDBReplInnodbFlushLogAtTrxCommitPrimary: "1",
 			},
 			wantConfig: `[mariadb]
 log_bin
 log_basename=mariadb
 server_id=10
+sync_binlog=1
 innodb_flush_log_at_trx_commit=1
 `,
 			wantErr: false,

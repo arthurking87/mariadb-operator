@@ -4444,21 +4444,6 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 		*out = new(WaitPoint)
 		**out = **in
 	}
-	if in.SemiSyncMasterEnabled != nil {
-		in, out := &in.SemiSyncMasterEnabled, &out.SemiSyncMasterEnabled
-		*out = new(bool)
-		**out = **in
-	}
-	if in.SyncBinlog != nil {
-		in, out := &in.SyncBinlog, &out.SyncBinlog
-		*out = new(int)
-		**out = **in
-	}
-	if in.InnodbFlushLogAtTrxCommit != nil {
-		in, out := &in.InnodbFlushLogAtTrxCommit, &out.InnodbFlushLogAtTrxCommit
-		*out = new(int)
-		**out = **in
-	}
 	in.InitContainer.DeepCopyInto(&out.InitContainer)
 	in.Agent.DeepCopyInto(&out.Agent)
 	if in.StandaloneProbes != nil {

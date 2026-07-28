@@ -68,17 +68,16 @@ type PodEnvironment struct {
 	MariadbRootPassword string `env:"MARIADB_ROOT_PASSWORD,required"`
 	MariadbPort         string `env:"MYSQL_TCP_PORT,required"`
 
-	MariaDBReplEnabled                   string `env:"MARIADB_REPL_ENABLED"`
-	MariaDBReplGtidStrictMode            string `env:"MARIADB_REPL_GTID_STRICT_MODE"`
-	MariaDBReplGtidDomainID              string `env:"MARIADB_REPL_GTID_DOMAIN_ID"`
-	MariaDBReplServerIDStartIndex        string `env:"MARIADB_REPL_SERVER_ID_START_INDEX"`
-	MariaDBReplAutoServerID              string `env:"MARIADB_REPL_AUTO_SERVER_ID"`
-	MariaDBReplSemiSyncEnabled           string `env:"MARIADB_REPL_SEMI_SYNC_ENABLED"`
-	MariaDBReplSemiSyncMasterEnabled     string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_ENABLED"`
-	MariaDBReplSemiSyncMasterTimeout     string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_TIMEOUT"`
-	MariaDBReplSemiSyncMasterWaitPoint   string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_WAIT_POINT"`
-	MariaDBReplMasterSyncBinlog          string `env:"MARIADB_REPL_SYNC_BINLOG"`
-	MariaDBReplInnodbFlushLogAtTrxCommit string `env:"MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT"`
+	MariaDBReplEnabled                          string `env:"MARIADB_REPL_ENABLED"`
+	MariaDBReplGtidStrictMode                   string `env:"MARIADB_REPL_GTID_STRICT_MODE"`
+	MariaDBReplGtidDomainID                     string `env:"MARIADB_REPL_GTID_DOMAIN_ID"`
+	MariaDBReplServerIDStartIndex               string `env:"MARIADB_REPL_SERVER_ID_START_INDEX"`
+	MariaDBReplAutoServerID                     string `env:"MARIADB_REPL_AUTO_SERVER_ID"`
+	MariaDBReplSemiSyncEnabled                  string `env:"MARIADB_REPL_SEMI_SYNC_ENABLED"`
+	MariaDBReplSemiSyncMasterTimeout            string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_TIMEOUT"`
+	MariaDBReplSemiSyncMasterWaitPoint          string `env:"MARIADB_REPL_SEMI_SYNC_MASTER_WAIT_POINT"`
+	MariaDBReplSyncBinlogPrimary                string `env:"MARIADB_REPL_SYNC_BINLOG_PRIMARY"`
+	MariaDBReplInnodbFlushLogAtTrxCommitPrimary string `env:"MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT_PRIMARY"`
 
 	TLSEnabled        string `env:"TLS_ENABLED"`
 	TLSCACertPath     string `env:"TLS_CA_CERT_PATH"`
@@ -140,16 +139,6 @@ func (e *PodEnvironment) ReplSemiSyncEnabled() (bool, error) {
 	return strconv.ParseBool(e.MariaDBReplSemiSyncEnabled)
 }
 
-// ReplSemiSyncMasterEnabled defaults to true (unlike the other Repl*Enabled getters) so that a
-// Pod which somehow doesn't get the env var set still gets the pre-existing symmetric semi-sync
-// behavior, instead of silently losing the primary's durability guarantee.
-func (e *PodEnvironment) ReplSemiSyncMasterEnabled() (bool, error) {
-	if e.MariaDBReplSemiSyncMasterEnabled == "" {
-		return true, nil
-	}
-	return strconv.ParseBool(e.MariaDBReplSemiSyncMasterEnabled)
-}
-
 func (e *PodEnvironment) ReplSemiSyncMasterTimeout() (*int64, error) {
 	replEnabled, err := e.IsReplEnabled()
 	if err != nil {
@@ -169,42 +158,46 @@ func (e *PodEnvironment) ReplSemiSyncMasterTimeout() (*int64, error) {
 	return &timeout, nil
 }
 
-func (e *PodEnvironment) ReplSyncBinlog() (*int, error) {
+// ReplSyncBinlogPrimary defaults to 1 (unlike the other Repl*Enabled getters, since this value is not
+// optional: my.cnf always boots into the primary/safe durability setting) so that a Pod which somehow
+// doesn't get the env var propagated still gets a durable default, matching the CRD's own default.
+func (e *PodEnvironment) ReplSyncBinlogPrimary() (int32, error) {
 	replEnabled, err := e.IsReplEnabled()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	if !replEnabled {
-		return nil, errors.New("replication must be enabled")
+		return 0, errors.New("replication must be enabled")
 	}
 
-	if e.MariaDBReplMasterSyncBinlog == "" {
-		return nil, nil
+	if e.MariaDBReplSyncBinlogPrimary == "" {
+		return 1, nil
 	}
-	timeout, err := strconv.Atoi(e.MariaDBReplMasterSyncBinlog)
+	value, err := strconv.ParseInt(e.MariaDBReplSyncBinlogPrimary, 10, 32)
 	if err != nil {
-		return nil, fmt.Errorf("invalid replication master sync binlog: %w", err)
+		return 0, fmt.Errorf("invalid replication primary sync_binlog: %w", err)
 	}
-	return &timeout, nil
+	return int32(value), nil
 }
 
-func (e *PodEnvironment) ReplInnodbFlushLogAtTrxCommit() (*int, error) {
+// ReplInnodbFlushLogAtTrxCommitPrimary defaults to 1, see ReplSyncBinlogPrimary.
+func (e *PodEnvironment) ReplInnodbFlushLogAtTrxCommitPrimary() (int32, error) {
 	replEnabled, err := e.IsReplEnabled()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	if !replEnabled {
-		return nil, errors.New("replication must be enabled")
+		return 0, errors.New("replication must be enabled")
 	}
 
-	if e.MariaDBReplInnodbFlushLogAtTrxCommit == "" {
-		return nil, nil
+	if e.MariaDBReplInnodbFlushLogAtTrxCommitPrimary == "" {
+		return 1, nil
 	}
-	value, err := strconv.Atoi(e.MariaDBReplInnodbFlushLogAtTrxCommit)
+	value, err := strconv.ParseInt(e.MariaDBReplInnodbFlushLogAtTrxCommitPrimary, 10, 32)
 	if err != nil {
-		return nil, fmt.Errorf("invalid replication innodb_flush_log_at_trx_commit: %w", err)
+		return 0, fmt.Errorf("invalid replication primary innodb_flush_log_at_trx_commit: %w", err)
 	}
-	return &value, nil
+	return int32(value), nil
 }
 
 func GetPodEnv(ctx context.Context) (*PodEnvironment, error) {

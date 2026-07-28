@@ -1412,12 +1412,14 @@ func TestMariadbEnv(t *testing.T) {
 					Replication: &mariadbv1alpha1.Replication{
 						Enabled: true,
 						ReplicationSpec: mariadbv1alpha1.ReplicationSpec{
-							GtidStrictMode:     ptr.To(true),
-							GtidDomainID:       ptr.To(10),
-							ServerIDStartIndex: ptr.To(100),
-							SemiSyncEnabled:    ptr.To(true),
-							SemiSyncAckTimeout: &metav1.Duration{Duration: 10 * time.Second},
-							SemiSyncWaitPoint:  ptr.To(mariadbv1alpha1.WaitPointAfterCommit),
+							GtidStrictMode:                   ptr.To(true),
+							GtidDomainID:                     ptr.To(10),
+							ServerIDStartIndex:               ptr.To(100),
+							SemiSyncEnabled:                  ptr.To(true),
+							SemiSyncAckTimeout:               &metav1.Duration{Duration: 10 * time.Second},
+							SemiSyncWaitPoint:                ptr.To(mariadbv1alpha1.WaitPointAfterCommit),
+							SyncBinlogPrimary:                1,
+							InnodbFlushLogAtTrxCommitPrimary: 1,
 						},
 					},
 				},
@@ -1458,10 +1460,18 @@ func TestMariadbEnv(t *testing.T) {
 						Name:  "MARIADB_REPL_SEMI_SYNC_MASTER_WAIT_POINT",
 						Value: "AFTER_COMMIT",
 					},
+					{
+						Name:  "MARIADB_REPL_SYNC_BINLOG_PRIMARY",
+						Value: "1",
+					},
+					{
+						Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT_PRIMARY",
+						Value: "1",
+					},
 				}...),
 		},
 		{
-			name: "MariaDB replication with auto server ID and semi-sync master disabled",
+			name: "MariaDB replication with auto server ID disabled and custom primary durability settings",
 			mariadb: &mariadbv1alpha1.MariaDB{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "mariadb-repl",
@@ -1470,10 +1480,10 @@ func TestMariadbEnv(t *testing.T) {
 					Replication: &mariadbv1alpha1.Replication{
 						Enabled: true,
 						ReplicationSpec: mariadbv1alpha1.ReplicationSpec{
-							AutoServerID:              ptr.To(false),
-							SemiSyncEnabled:           ptr.To(true),
-							SemiSyncMasterEnabled:     ptr.To(false),
-							InnodbFlushLogAtTrxCommit: ptr.To(1),
+							AutoServerID:                     ptr.To(false),
+							SemiSyncEnabled:                  ptr.To(true),
+							SyncBinlogPrimary:                1,
+							InnodbFlushLogAtTrxCommitPrimary: 2,
 						},
 					},
 				},
@@ -1503,12 +1513,12 @@ func TestMariadbEnv(t *testing.T) {
 						Value: strconv.FormatBool(true),
 					},
 					{
-						Name:  "MARIADB_REPL_SEMI_SYNC_MASTER_ENABLED",
-						Value: strconv.FormatBool(false),
+						Name:  "MARIADB_REPL_SYNC_BINLOG_PRIMARY",
+						Value: "1",
 					},
 					{
-						Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT",
-						Value: "1",
+						Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT_PRIMARY",
+						Value: "2",
 					},
 				}...),
 		},

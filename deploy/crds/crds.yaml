@@ -7100,14 +7100,29 @@ spec:
                     required:
                     - image
                     type: object
-                  innodbFlushLogAtTrxCommit:
+                  innodbFlushLogAtTrxCommitPrimary:
+                    default: 1
                     description: |-
-                      InnodbFlushLogAtTrxCommit controls the innodb_flush_log_at_trx_commit durability/throughput trade-off.
+                      InnodbFlushLogAtTrxCommitPrimary controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as primary.
+                      The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
                       See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
                     enum:
                     - 0
                     - 1
                     - 2
+                    format: int32
+                    type: integer
+                  innodbFlushLogAtTrxCommitReplica:
+                    default: 2
+                    description: |-
+                      InnodbFlushLogAtTrxCommitReplica controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as a replica.
+                      The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
+                      See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
+                    enum:
+                    - 0
+                    - 1
+                    - 2
+                    format: int32
                     type: integer
                   primary:
                     description: Primary is the replication configuration for the
@@ -7579,14 +7594,6 @@ spec:
                       See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication
                       It is enabled by default
                     type: boolean
-                  semiSyncMasterEnabled:
-                    description: |-
-                      SemiSyncMasterEnabled controls whether the primary blocks commits waiting for a semi-sync ACK.
-                      It requires semi-synchronous replication to be enabled. Defaults to true (symmetric semi-sync, matching
-                      MariaDB's own default). Set it to false to prioritize write throughput: a node still ACKs when acting as
-                      replica (rpl_semi_sync_slave_enabled stays ON), but never blocks commits when acting as primary
-                      (rpl_semi_sync_master_enabled=OFF).
-                    type: boolean
                   semiSyncWaitPoint:
                     description: |-
                       SemiSyncWaitPoint determines whether the transaction should wait for an ACK after having synced the binlog (AfterSync)
@@ -7608,10 +7615,23 @@ spec:
                       StandaloneProbes indicates whether to use the default non-HA startup and liveness probes.
                       It is disabled by default
                     type: boolean
-                  syncBinlog:
+                  syncBinlogPrimary:
+                    default: 1
                     description: |-
-                      SyncBinlog indicates after how many events the binary log is synchronized to the disk.
+                      SyncBinlogPrimary indicates after how many events the binary log is synchronized to disk while the Pod acts as primary.
+                      The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
                       See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  syncBinlogReplica:
+                    default: 5
+                    description: |-
+                      SyncBinlogReplica indicates after how many events the binary log is synchronized to disk while the Pod acts as a replica.
+                      The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
+                      See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
+                    format: int32
+                    minimum: 0
                     type: integer
                 type: object
               resources:
