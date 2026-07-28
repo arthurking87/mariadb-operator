@@ -6,6 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
@@ -46,5 +47,39 @@ func TestPredicateWithLabelCountsEvents(t *testing.T) {
 	}
 	if filtered != 1 {
 		t.Errorf("expected 1 filtered event, got %v", filtered)
+	}
+}
+
+// TestPredicateAnnotationConstructorsAttributeMetricsToThemselves guards against the two public
+// constructors sharing predicateWithAnnotations' implementation but reporting events under the
+// wrong name — PredicateWithAnnotations previously called PredicateChangedWithAnnotations
+// directly, so its events were counted under "PredicateChangedWithAnnotations" instead of its
+// own name.
+func TestPredicateAnnotationConstructorsAttributeMetricsToThemselves(t *testing.T) {
+	filteredEventsTotal.Reset()
+
+	withAnnotations := PredicateWithAnnotations([]string{"foo"})
+	withAnnotations.Create(event.CreateEvent{
+		Object: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"foo": "bar"}}},
+	})
+	withAnnotations.Create(event.CreateEvent{
+		Object: &corev1.Secret{},
+	})
+
+	changedWithAnnotations := PredicateChangedWithAnnotations([]string{"foo"}, func(old, new client.Object) bool {
+		return true
+	})
+	changedWithAnnotations.Create(event.CreateEvent{
+		Object: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"foo": "bar"}}},
+	})
+
+	if got := testutil.ToFloat64(filteredEventsTotal.WithLabelValues("PredicateWithAnnotations", "passed")); got != 1 {
+		t.Errorf("expected 1 passed event attributed to PredicateWithAnnotations, got %v", got)
+	}
+	if got := testutil.ToFloat64(filteredEventsTotal.WithLabelValues("PredicateWithAnnotations", "filtered")); got != 1 {
+		t.Errorf("expected 1 filtered event attributed to PredicateWithAnnotations, got %v", got)
+	}
+	if got := testutil.ToFloat64(filteredEventsTotal.WithLabelValues("PredicateChangedWithAnnotations", "passed")); got != 1 {
+		t.Errorf("expected 1 passed event attributed to PredicateChangedWithAnnotations, got %v", got)
 	}
 }

@@ -49,7 +49,7 @@ func IsMariadbReplRelated(o client.Object) bool {
 }
 
 func PredicateWithAnnotations(annotations []string) predicate.Predicate {
-	return PredicateChangedWithAnnotations(annotations, func(old, new client.Object) bool {
+	return predicateWithAnnotations("PredicateWithAnnotations", annotations, func(old, new client.Object) bool {
 		return true
 	})
 }
@@ -73,7 +73,14 @@ func PredicateWithLabel(label string) predicate.Predicate {
 }
 
 func PredicateChangedWithAnnotations(annotations []string, hasChanged func(old, new client.Object) bool) predicate.Predicate {
-	const name = "PredicateChangedWithAnnotations"
+	return predicateWithAnnotations("PredicateChangedWithAnnotations", annotations, hasChanged)
+}
+
+// predicateWithAnnotations is the shared implementation behind PredicateWithAnnotations and
+// PredicateChangedWithAnnotations. name is passed in explicitly so each public constructor's
+// events are attributed to itself in the predicate metric, rather than both being recorded
+// under PredicateChangedWithAnnotations regardless of which one the caller actually used.
+func predicateWithAnnotations(name string, annotations []string, hasChanged func(old, new client.Object) bool) predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
 			return observe(name, hasAnnotations(e.Object, annotations))
