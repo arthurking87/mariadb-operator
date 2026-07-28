@@ -160,7 +160,8 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 // end up writable at once. DisableReadOnly is safe to call even if the primary was never
 // actually set read-only yet (e.g. the failure happened in that phase itself): it's a no-op
 // in that case.
-func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger, restoreWriteAccess bool) error {
+func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger,
+	restoreWriteAccess bool) error {
 	if !req.currentPrimaryReady {
 		return nil
 	}
