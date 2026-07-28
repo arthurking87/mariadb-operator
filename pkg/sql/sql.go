@@ -718,10 +718,42 @@ func (c *Client) SetSystemVariable(ctx context.Context, variable string, value s
 	return c.Exec(ctx, sql)
 }
 
-func (c *Client) LockTablesWithReadLock(ctx context.Context) error {
-	return c.Exec(ctx, "FLUSH TABLES WITH READ LOCK;")
+// LockedSession holds a dedicated connection with an active FLUSH TABLES WITH READ LOCK.
+// The lock is session-scoped: it can only be released on the same connection that acquired
+// it, so callers must hold on to the returned LockedSession and release it via Unlock rather
+// than issuing UNLOCK TABLES through the Client (which may run on a different pooled connection).
+type LockedSession struct {
+	conn *sql.Conn
 }
 
+// LockTablesWithReadLock acquires FLUSH TABLES WITH READ LOCK on a dedicated connection,
+// checked out from the pool for the lifetime of the lock. See LockedSession.
+func (c *Client) LockTablesWithReadLock(ctx context.Context) (*LockedSession, error) {
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "FLUSH TABLES WITH READ LOCK;"); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return &LockedSession{conn: conn}, nil
+}
+
+// Unlock releases the read lock and returns the underlying connection to the pool.
+func (s *LockedSession) Unlock(ctx context.Context) error {
+	defer s.conn.Close()
+	_, err := s.conn.ExecContext(ctx, "UNLOCK TABLES;")
+	return err
+}
+
+// UnlockTables issues UNLOCK TABLES on a pooled connection rather than the one that acquired
+// a lock via LockTablesWithReadLock. Since UNLOCK TABLES only releases locks held by its own
+// session, this only reliably helps when nothing is actually locked (a harmless no-op) or
+// when the pool happens to hand back the same physical connection that holds the lock. It
+// exists for recovery paths (e.g. reconcileStaleSwitchover) that no longer have access to the
+// original LockedSession, most commonly after an operator restart — use LockTablesWithReadLock
+// + LockedSession.Unlock instead whenever the same reconcile acquired the lock.
 func (c *Client) UnlockTables(ctx context.Context) error {
 	return c.Exec(ctx, "UNLOCK TABLES;")
 }

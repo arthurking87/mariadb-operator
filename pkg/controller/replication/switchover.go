@@ -24,6 +24,11 @@ import (
 type switchoverPhase struct {
 	name      string
 	reconcile func(context.Context, *ReconcileRequest, logr.Logger) error
+	// rollbackOnFailure indicates whether a failure in this phase can still be safely rolled
+	// back by restoring the current primary's write access. Once "Configure new primary" has
+	// succeeded, the new primary is already writable, so restoring the old primary's write
+	// access too would risk a dual-writable cluster — later phases must not roll back.
+	rollbackOnFailure bool
 }
 
 func isSwitchoverStale(mdb *mariadbv1alpha1.MariaDB) bool {
@@ -70,28 +75,38 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 
 	phases := []switchoverPhase{
 		{
-			name:      "Lock primary with read lock",
-			reconcile: r.lockPrimaryWithReadLock,
+			name:              "Lock primary with read lock",
+			reconcile:         r.lockPrimaryWithReadLock,
+			rollbackOnFailure: true,
 		},
 		{
-			name:      "Set read_only in primary",
-			reconcile: r.setPrimaryReadOnly,
+			name:              "Set read_only in primary",
+			reconcile:         r.setPrimaryReadOnly,
+			rollbackOnFailure: true,
 		},
 		{
-			name:      "Wait sync",
-			reconcile: r.waitSync,
+			name:              "Wait sync",
+			reconcile:         r.waitSync,
+			rollbackOnFailure: true,
 		},
 		{
 			name:      "Configure new primary",
 			reconcile: r.configureNewPrimary,
+			// Once this phase's reconcile func returns, the new primary may already be
+			// writable even on failure (ConfigurePrimary can fail partway through, after
+			// DisableReadOnly already ran) — restoring the old primary's write access here
+			// or in any later phase would risk a dual-writable cluster.
+			rollbackOnFailure: false,
 		},
 		{
-			name:      "Connect replicas to new primary",
-			reconcile: r.connectReplicasToNewPrimary,
+			name:              "Connect replicas to new primary",
+			reconcile:         r.connectReplicasToNewPrimary,
+			rollbackOnFailure: false,
 		},
 		{
-			name:      "Change primary to replica",
-			reconcile: r.changePrimaryToReplica,
+			name:              "Change primary to replica",
+			reconcile:         r.changePrimaryToReplica,
+			rollbackOnFailure: false,
 		},
 	}
 
@@ -100,17 +115,23 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			if apierrors.IsNotFound(err) {
 				return err
 			}
-			// A failure here (most commonly "Wait sync" timing out on a lagging
-			// replica) would otherwise leave the primary locked + read-only
-			// indefinitely: isSwitchoverStale() doesn't catch this, because the
+			// A failure before the new primary is configured (most commonly "Wait sync"
+			// timing out on a lagging replica) would otherwise leave the primary locked +
+			// read-only indefinitely: isSwitchoverStale() doesn't catch this, because the
 			// switchover is still "required" from the spec's point of view
 			// (status.currentPrimaryPodIndex was never updated), so the next
 			// reconcile just retries the same phases from "Lock primary with
 			// read lock" again instead of going through the stale-switchover
 			// recovery path. Roll back write access so the cluster isn't stuck
-			// rejecting writes while switchover keeps retrying.
-			if rollbackErr := r.rollbackSwitchover(ctx, req, logger); rollbackErr != nil {
+			// rejecting writes while switchover keeps retrying. The read lock itself is
+			// always released regardless of the phase, since holding FLUSH TABLES WITH
+			// READ LOCK indefinitely would block writes cluster-wide.
+			if rollbackErr := r.rollbackSwitchover(ctx, req, logger, p.rollbackOnFailure); rollbackErr != nil {
 				logger.Error(rollbackErr, "error rolling back switchover after failed phase", "phase", p.name)
+			}
+			if !p.rollbackOnFailure {
+				logger.Error(err, "switchover failed after the new primary was configured; "+
+					"leaving the old primary read-only to avoid a dual-writable cluster", "phase", p.name)
 			}
 			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, err)
 		}
@@ -129,25 +150,38 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	return nil
 }
 
-// rollbackSwitchover restores write access to the current primary after a
-// switchover phase fails partway through (after the primary was already
-// locked/set read-only by lockPrimaryWithReadLock/setPrimaryReadOnly).
-// UnlockTables/DisableReadOnly are safe to call even if the primary was
-// never actually locked/read-only yet (e.g. the failure happened in one of
-// those two phases themselves): both are no-ops in that case.
-func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger) error {
+// rollbackSwitchover releases the primary's read lock and, if restoreWriteAccess is set,
+// restores its write access after a switchover phase fails partway through (after the
+// primary was already locked/set read-only by lockPrimaryWithReadLock/setPrimaryReadOnly).
+// The read lock is always released if held: leaving FLUSH TABLES WITH READ LOCK in place
+// indefinitely would block writes cluster-wide, and releasing it doesn't by itself make the
+// primary writable again (read_only is a separate guard). restoreWriteAccess must only be
+// set once the new primary hasn't already been made writable, otherwise both primaries could
+// end up writable at once. DisableReadOnly is safe to call even if the primary was never
+// actually set read-only yet (e.g. the failure happened in that phase itself): it's a no-op
+// in that case.
+func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger, restoreWriteAccess bool) error {
 	if !req.currentPrimaryReady {
 		return nil
 	}
+
+	if req.primaryLockSession != nil {
+		logger.Info("Rolling back switchover: releasing primary read lock")
+		if err := req.primaryLockSession.Unlock(ctx); err != nil {
+			return fmt.Errorf("error unlocking primary: %v", err)
+		}
+		req.primaryLockSession = nil
+	}
+
+	if !restoreWriteAccess {
+		return nil
+	}
+
 	client, err := req.replClientSet.currentPrimaryClient(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting current primary client: %v", err)
 	}
-
 	logger.Info("Rolling back switchover: restoring primary write access")
-	if err := client.UnlockTables(ctx); err != nil {
-		return fmt.Errorf("error unlocking primary: %v", err)
-	}
 	if err := client.DisableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error disabling readonly in primary: %v", err)
 	}
@@ -203,7 +237,12 @@ func (r *ReplicationReconciler) lockPrimaryWithReadLock(ctx context.Context, req
 	logger.Info("Locking primary with read lock")
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonReplicationPrimaryLock,
 		mariadbv1alpha1.ActionReconciling, "Locking primary with read lock")
-	return client.LockTablesWithReadLock(ctx)
+	session, err := client.LockTablesWithReadLock(ctx)
+	if err != nil {
+		return err
+	}
+	req.primaryLockSession = session
+	return nil
 }
 
 func (r *ReplicationReconciler) setPrimaryReadOnly(ctx context.Context, req *ReconcileRequest, logger logr.Logger) error {
@@ -455,8 +494,11 @@ func (r *ReplicationReconciler) changePrimaryToReplica(ctx context.Context, req 
 	logger.Info("Unlocking primary")
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonReplicationPrimaryLock,
 		mariadbv1alpha1.ActionReconciling, "Unlocking primary")
-	if err := currentPrimaryClient.UnlockTables(ctx); err != nil {
-		return fmt.Errorf("error unlocking primary: %v", err)
+	if req.primaryLockSession != nil {
+		if err := req.primaryLockSession.Unlock(ctx); err != nil {
+			return fmt.Errorf("error unlocking primary: %v", err)
+		}
+		req.primaryLockSession = nil
 	}
 
 	topology := r.topologyManager.TopologyForMariaDB(req.mariadb, logger)
