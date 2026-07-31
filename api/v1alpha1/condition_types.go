@@ -25,6 +25,12 @@ const (
 	ConditionTypeReplicaRecovered string = "ReplicaRecovered"
 	// ConditionTypeReplicationConfigured indicates that replication has been successfully configured.
 	ConditionTypeReplicationConfigured string = "ReplicationConfigured"
+	// ConditionTypeNewPrimaryConfigured indicates that the new primary has already been made
+	// writable during an in-progress switchover. It lets a retry resume after this point instead
+	// of restarting the whole phase sequence, which would otherwise retry "Wait sync" against the
+	// old primary's GTID — something the new primary, now independently writable, can never catch
+	// up to again.
+	ConditionTypeNewPrimaryConfigured string = "NewPrimaryConfigured"
 
 	ConditionReasonStatefulSetNotReady   string = "StatefulSetNotReady"
 	ConditionReasonStatefulSetReady      string = "StatefulSetReady"

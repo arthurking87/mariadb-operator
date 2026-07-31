@@ -24,6 +24,11 @@ import (
 type switchoverPhase struct {
 	name      string
 	reconcile func(context.Context, *ReconcileRequest, logr.Logger) error
+	// afterSuccess, if set, runs right after reconcile succeeds, before moving on to the next
+	// phase. Used to persist progress that a retry needs to know about.
+	afterSuccess func(context.Context, *ReconcileRequest, logr.Logger) error
+	// resumePoint marks the phase a retry should resume from once IsNewPrimaryConfigured is true.
+	resumePoint bool
 	// rollbackOnFailure indicates whether a failure in this phase can still be safely rolled
 	// back by restoring the current primary's write access. Once "Configure new primary" has
 	// succeeded, the new primary is already writable, so restoring the old primary's write
@@ -97,17 +102,37 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			// DisableReadOnly already ran) — restoring the old primary's write access here
 			// or in any later phase would risk a dual-writable cluster.
 			rollbackOnFailure: false,
+			afterSuccess:      r.markNewPrimaryConfigured,
 		},
 		{
 			name:              "Connect replicas to new primary",
 			reconcile:         r.connectReplicasToNewPrimary,
 			rollbackOnFailure: false,
+			// The phase to resume from when a previous attempt already got through "Configure
+			// new primary" (see the IsNewPrimaryConfigured check below).
+			resumePoint: true,
 		},
 		{
 			name:              "Change primary to replica",
 			reconcile:         r.changePrimaryToReplica,
 			rollbackOnFailure: false,
 		},
+	}
+
+	if req.mariadb.IsNewPrimaryConfigured(newPrimaryPodName) {
+		// A previous attempt already got through "Configure new primary" before a later phase
+		// failed (e.g. the primary Pod was replaced mid-switchover and the connection used to
+		// release its read lock died). Restarting from "Lock primary with read lock" would
+		// re-run "Wait sync", comparing replicas against the OLD primary's GTID — but the new
+		// primary is already writable and no longer replicating from it, so it can never reach
+		// that GTID again. Resume from the resumePoint phase instead, to avoid that livelock.
+		for i, p := range phases {
+			if p.resumePoint {
+				phases = phases[i:]
+				break
+			}
+		}
+		logger.Info("Resuming switchover: new primary was already configured in a previous attempt")
 	}
 
 	for _, p := range phases {
@@ -135,11 +160,19 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			}
 			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, err)
 		}
+		if p.afterSuccess != nil {
+			if err := p.afterSuccess(ctx, req, logger.WithValues("phase", p.name)); err != nil {
+				return fmt.Errorf("error finalizing %s switchover reconcile phase: %v", p.name, err)
+			}
+		}
 	}
 
 	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
 		status.UpdateCurrentPrimary(req.mariadb, newPrimary)
 		condition.SetPrimarySwitched(&req.mariadb.Status)
+		// Otherwise it would leak into a future, unrelated switchover that targets the same Pod
+		// index again, wrongly making it skip straight to "Connect replicas to new primary".
+		status.RemoveCondition(mariadbv1alpha1.ConditionTypeNewPrimaryConfigured)
 	}); err != nil {
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
@@ -148,6 +181,17 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitched,
 		mariadbv1alpha1.ActionReconciling, "Primary switched from index '%d' to index '%d'", *primary, newPrimary)
 	return nil
+}
+
+// markNewPrimaryConfigured persists that the new primary has already been made writable, so that
+// if a later phase fails, the retry can resume from "Connect replicas to new primary" instead of
+// restarting the whole sequence (see the IsNewPrimaryConfigured check in reconcileSwitchover).
+func (r *ReplicationReconciler) markNewPrimaryConfigured(ctx context.Context, req *ReconcileRequest, logger logr.Logger) error {
+	newPrimary := *ptr.Deref(req.mariadb.Spec.Replication, mariadbv1alpha1.Replication{}).Primary.PodIndex
+	newPrimaryPodName := statefulset.PodName(req.mariadb.ObjectMeta, newPrimary)
+	return r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		condition.SetNewPrimaryConfigured(&req.mariadb.Status, newPrimaryPodName)
+	})
 }
 
 // rollbackSwitchover releases the primary's read lock and, if restoreWriteAccess is set,
@@ -168,10 +212,14 @@ func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *Rec
 
 	if req.primaryLockSession != nil {
 		logger.Info("Rolling back switchover: releasing primary read lock")
-		if err := req.primaryLockSession.Unlock(ctx); err != nil {
+		session := req.primaryLockSession
+		// Clear it before attempting Unlock, not after: whether or not the call succeeds, the
+		// session is spent and must not be retried against — e.g. changePrimaryToReplica already
+		// tried and failed to unlock this same session, that's why we're here.
+		req.primaryLockSession = nil
+		if err := session.Unlock(ctx); err != nil {
 			return fmt.Errorf("error unlocking primary: %v", err)
 		}
-		req.primaryLockSession = nil
 	}
 
 	if !restoreWriteAccess {
@@ -496,10 +544,25 @@ func (r *ReplicationReconciler) changePrimaryToReplica(ctx context.Context, req 
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonReplicationPrimaryLock,
 		mariadbv1alpha1.ActionReconciling, "Unlocking primary")
 	if req.primaryLockSession != nil {
-		if err := req.primaryLockSession.Unlock(ctx); err != nil {
+		session := req.primaryLockSession
+		// Clear it before attempting Unlock, not after: whether or not the call succeeds, the
+		// session is spent. Leaving it set on failure would make rollbackSwitchover retry Unlock
+		// against the same (likely already broken) connection, producing a second, more
+		// confusing error instead of the original one.
+		req.primaryLockSession = nil
+		if err := session.Unlock(ctx); err != nil {
 			return fmt.Errorf("error unlocking primary: %v", err)
 		}
-		req.primaryLockSession = nil
+	} else {
+		// Resuming a switchover whose lock phase ran in a previous, failed reconcile: the
+		// dedicated session isn't available across reconciles, so fall back to a best-effort
+		// unlock through a fresh pooled connection, same as reconcileStaleSwitchover's recovery
+		// path. If the original session's connection died, MariaDB already released the
+		// session-scoped read lock when that connection closed, so this is most likely a no-op.
+		if err := currentPrimaryClient.UnlockTables(ctx); err != nil {
+			logger.Error(err, "Error unlocking primary through a fresh connection; "+
+				"the read lock was most likely already released when the original session closed")
+		}
 	}
 
 	topology := r.topologyManager.TopologyForMariaDB(req.mariadb, logger)
