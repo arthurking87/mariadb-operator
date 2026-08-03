@@ -25,17 +25,11 @@ import (
 type switchoverPhase struct {
 	name      string
 	reconcile func(context.Context, *ReconcileRequest, logr.Logger) error
-	// timeout bounds a single attempt of this phase. Zero means no phase-specific bound is applied
-	// (used by the "Wait sync" phase, which manages its own timeout via replication.Replica.SyncTimeout).
-	timeout time.Duration
 }
 
 // waitSyncPhaseName identifies the "Wait sync" phase, whose cumulative retry time across
 // reconciles is bounded by replication.Primary.SwitchoverTimeout, independently of the other phases.
 const waitSyncPhaseName = "Wait sync"
-
-// otherPhaseTimeout bounds a single attempt of every switchover phase other than "Wait sync".
-const otherPhaseTimeout = 10 * time.Second
 
 func isSwitchoverStale(mdb *mariadbv1alpha1.MariaDB) bool {
 	return mdb.IsSwitchingPrimary() && !mdb.IsReplicationSwitchoverRequired()
@@ -83,12 +77,10 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		{
 			name:      "Lock primary with read lock",
 			reconcile: r.lockPrimaryWithReadLock,
-			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      "Set read_only in primary",
 			reconcile: r.setPrimaryReadOnly,
-			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      waitSyncPhaseName,
@@ -97,30 +89,19 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		{
 			name:      "Configure new primary",
 			reconcile: r.configureNewPrimary,
-			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      "Connect replicas to new primary",
 			reconcile: r.connectReplicasToNewPrimary,
-			timeout:   otherPhaseTimeout,
 		},
 		{
 			name:      "Change primary to replica",
 			reconcile: r.changePrimaryToReplica,
-			timeout:   otherPhaseTimeout,
 		},
 	}
 
 	for _, p := range phases {
-		phaseCtx := ctx
-		var cancel context.CancelFunc
-		if p.timeout > 0 {
-			phaseCtx, cancel = context.WithTimeout(ctx, p.timeout)
-		}
-		err := p.reconcile(phaseCtx, req, logger.WithValues("phase", p.name))
-		if cancel != nil {
-			cancel()
-		}
+		err := p.reconcile(ctx, req, logger.WithValues("phase", p.name))
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return err
