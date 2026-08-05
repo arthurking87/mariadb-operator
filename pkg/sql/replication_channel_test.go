@@ -317,7 +317,13 @@ func TestChangeMasterChannel(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := "CHANGE MASTER 'mariadb-operator' TO\nMASTER_HOST='127.0.0.1',\nMASTER_PORT=3306,\nMASTER_USER='repl',\nMASTER_PASSWORD='password',\nMASTER_USE_GTID=CurrentPos;\n"
+	want := `CHANGE MASTER 'mariadb-operator' TO
+MASTER_HOST='127.0.0.1',
+MASTER_PORT=3306,
+MASTER_USER='repl',
+MASTER_PASSWORD='password',
+MASTER_USE_GTID=CurrentPos;
+`
 	if got := drv.LastQuery(); got != want {
 		t.Errorf("got query %q, want %q", got, want)
 	}
