@@ -135,7 +135,7 @@ func newReconcileUpdatesFixture(t *testing.T, readyReplicasAfterUpdate int32) (*
 
 // TestReconcileUpdatesWaitsForReadyStatusAfterReplicaUpdate is a regression test for
 // https://github.com/mariadb-operator/mariadb-operator/issues/41: after updating a stale replica
-// Pod, reconcileUpdates must gate on waitForReadyStatus instead of unconditionally requeueing,
+// Pod, reconcileUpdates must gate on waitForReadyStatus instead of unconditionally requeuing,
 // so that the next replica (or the primary) is not updated before the StatefulSet has caught up.
 func TestReconcileUpdatesWaitsForReadyStatusAfterReplicaUpdate(t *testing.T) {
 	// The StatefulSet is fully Ready when reconcileUpdates starts, but its status.readyReplicas
