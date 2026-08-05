@@ -3,6 +3,49 @@
 > 產生日期：2026-08-05。記錄 `ui/` 這個 React + Express 小面板的現況、異動決策，以及尚未實作項目的規劃討論。
 > 面板結構：`ui/src/App.jsx`（路由）+ `ui/src/components/Sidebar.jsx`（左側導覽）+ `ui/src/pages/*.jsx`（各頁）+ `ui/server.js`（Express API，包在同一個容器內用 `kubectl`/`helm` 操作叢集）。
 
+## New Instance 精靈：整合 Percona PMM Monitoring（2026-08-05）
+
+你問「知道 Percona Monitoring and Management 嗎？有辦法將裡面監控與這 UI 結合嗎？」
+
+**先查證可行性**：mariadb-operator 本身沒有原生的 PMM 整合，但 `MariaDB` CRD 有 `spec.sidecarContainers`（`api/v1alpha1/mariadb_types.go:542-545`）——可以塞任意 Container 進 Pod，不需要改 operator 原始碼。搭配 `spec.volumes`（`mariadb_types.go:569`，支援 `emptyDir`）可以給這個 sidecar 一塊可寫入的空間。這條路徑走得通，所以按你的指示直接做了，不是先回報「不行」。
+
+叢集裡目前沒有 PMM Server（`kubectl get pods/svc -A | grep pmm` 都是空的），所以這個功能只做「幫你的 MariaDB instance 接上已存在的 PMM Server」這一段，不包含部署 PMM Server 本身。
+
+**做了什麼**：New Instance 精靈的 Security 步驟、Metrics 卡片下方新增一張「Percona PMM Monitoring」卡片，開關打開後填：
+- PMM Server 位址（host:port）
+- PMM Server 帳密（存進 `<name>-pmm-server` Secret）
+- Skip TLS verification（PMM Server 常見自簽憑證）
+- PMM Client image（預設 `percona/pmm-client:3`，可手動改成 `:2` 對應 PMM Server 是 v2 的情況）
+- Database 監控帳密（存進 `<name>-pmm-db` Secret；這個 MySQL 使用者需要 `SELECT, PROCESS, REPLICATION CLIENT, RELOAD` 等權限，這張表單不會自動建立這個使用者，要用這個面板的 Users/Grants CRD 分頁另外建）
+
+送出後會在 `spec` 裡加上：
+```yaml
+volumes:
+  - name: pmm-client-storage
+    emptyDir: {}
+sidecarContainers:
+  - name: pmm-client
+    image: percona/pmm-client:3
+    volumeMounts:
+      - name: pmm-client-storage
+        mountPath: /usr/local/percona/pmm/config
+    env:
+      - name: PMM_AGENT_SERVER_ADDRESS / USERNAME / PASSWORD / INSECURE_TLS
+      - name: PMM_AGENT_CONFIG_FILE
+      - name: PMM_AGENT_SETUP / SETUP_FORCE / SIDECAR
+      - name: PMM_DB_USERNAME / PMM_DB_PASSWORD
+      - name: PMM_AGENT_PRERUN_SCRIPT   # pmm-admin add mysql --host=127.0.0.1 --port=3306 ...
+```
+
+**過程中修正了兩個自己犯的錯**，都是靠實際部署到 KIND 叢集才抓出來的，光看 YAML 生成邏輯看不出來：
+
+1. 第一版直接照網路上零散的 PMM Docker 環境變數（`PMM_AGENT_SETUP_NODE_TYPE=container`、`PMM_AGENT_SETUP_SERVICE_NAME` 等）拼，部署後 `pmm-client` container 直接 `CrashLoopBackOff`——查了 log 才發現那組變數是「pmm-client 自己當一個 standalone container/node」的模式，不是「sidecar 掛在別的 DB container 旁邊」的模式。用 WebFetch 查了 Percona 官方文件（[Install PMM Client on Kubernetes](https://docs.percona.com/percona-monitoring-and-management/3/install-pmm/install-pmm-client/kubernetes.html)）裡完整的 sidecar YAML 範例後重寫：關鍵是要有 `PMM_AGENT_SIDECAR=1`（讓 entrypoint 保持重試而不是跑一次就退出）+ `PMM_AGENT_CONFIG_FILE` + `PMM_AGENT_PRERUN_SCRIPT` 裡呼叫 `pmm-admin add mysql`（而不是 `PMM_AGENT_SETUP_*` 那組變數）。
+2. 修正後第一次還是 crash，log 顯示 `Failed to load configuration: ... permission denied`——`pmm-client` 需要一個可寫入的設定目錄。加了 `emptyDir` 掛到 `/usr/local/percona/pmm`（整個安裝根目錄）後又壞掉，變成 `exec: "pmm-agent-entrypoint": no such file or directory`——emptyDir 掛在那層會整個蓋掉 image 內建的二進位檔（K8s volume mount 的常見坑）。改成只掛 `/usr/local/percona/pmm/config` 這一層之後才穩定跑起來。
+
+**驗證**：在 `test1` namespace 實際部署過兩次（一次用手刻 YAML 測 sidecar 修正過程、一次直接打 `/api/deploy`——跟 UI 走的是同一條路徑）。兩次都確認 `mariadb`、`pmm-client` 兩個 container 都進入穩定 `Running`（不是一次性 exit），`pmm-client` log 顯示設定檔讀取成功、正確從 Secret 解析出 `PMM_AGENT_SERVER_ADDRESS` 並嘗試對外註冊，最後卡在「`dial tcp: lookup pmm-server.monitoring.svc.cluster.local: no such host`」——這是預期的（叢集裡沒有真的 PMM Server，這只是驗證用的假地址），代表整條線路是通的，接上真的 PMM Server 位址就能運作。測試資源事後都清掉了。用 headless Chrome 走過精靈填表 + Review 步驟的 YAML 預覽，畫面跟生成的 YAML 都正常、無 console 錯誤。
+
+**已知限制**：PMM Client 的設定檔用 `emptyDir`（非持久化），Pod 重啟會遺失、需要重新註冊——`pmm-admin add mysql` 本身冪等，重新註冊不會出錯，只是每次重啟都會重跑一次。之後如果想做成真正持久化，需要另外在精靈裡加一個 PVC size 欄位（目前為了先把核心功能做完沒加，可以之後再補）。
+
 ## New Instance 精靈：Storage Class 改成動態抓叢集清單 + 可自由輸入（2026-08-05）
 
 你想用自己實際的 NetApp SAN storage class（`netapp-san-ssd-dc1`/`dc2`/`dc3`），並問「如果 replica 為 3 就各一個，如果是其他就可以靈活調整」——也就是想要「每個 replica 綁不同 StorageClass（依 DC 分散）」。

@@ -102,9 +102,15 @@ function buildYAML(form) {
   }
   if (form.pmmEnabled) {
     const pmmImage = form.pmmImage?.trim() || 'percona/pmm-client:3'
+    lines.push(`  volumes:`)
+    lines.push(`    - name: pmm-client-storage`)
+    lines.push(`      emptyDir: {}`)
     lines.push(`  sidecarContainers:`)
     lines.push(`    - name: pmm-client`)
     lines.push(`      image: ${pmmImage}`)
+    lines.push(`      volumeMounts:`)
+    lines.push(`        - name: pmm-client-storage`)
+    lines.push(`          mountPath: /usr/local/percona/pmm/config`)
     lines.push(`      env:`)
     lines.push(`        - name: PMM_AGENT_SERVER_ADDRESS`)
     lines.push(`          value: "${form.pmmServerAddress}"`)

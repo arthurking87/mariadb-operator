@@ -679,9 +679,15 @@ function buildYAML(form) {
   if (form.pmmEnabled) {
     const nm = form.name || 'my-mariadb'
     lines.push(
+      `  volumes:`,
+      `    - name: pmm-client-storage`,
+      `      emptyDir: {}`,
       `  sidecarContainers:`,
       `    - name: pmm-client`,
       `      image: ${form.pmmImage}`,
+      `      volumeMounts:`,
+      `        - name: pmm-client-storage`,
+      `          mountPath: /usr/local/percona/pmm/config`,
       `      env:`,
       `        - name: PMM_AGENT_SERVER_ADDRESS`,
       `          value: "${form.pmmServerAddress}"`,
