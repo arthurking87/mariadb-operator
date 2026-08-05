@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/hashicorp/go-multierror"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
@@ -116,6 +117,14 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting new primary Pod index: %v", err)
 	}
 
+	return r.promoteReplica(ctx, pod, mariadb, primary, newPrimary, logger)
+}
+
+// promoteReplica deletes the old primary Pod and promotes newPrimary to be the new primary,
+// patching mariadb accordingly. primary and newPrimary are the resolved old and new primary
+// Pod indexes respectively.
+func (r *PodReplicationController) promoteReplica(ctx context.Context, pod corev1.Pod, mariadb *mariadbv1alpha1.MariaDB,
+	primary, newPrimary *int, logger logr.Logger) error {
 	// The old primary may still be holding application connections open (e.g. it is
 	// NotReady due to a failed health check rather than a crashed mariadbd process),
 	// which would otherwise sit until the client times out. Deleting it forces those
@@ -137,7 +146,7 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 	}
 
 	var errBundle *multierror.Error
-	err = r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
+	err := r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
 		mdb.Spec.Replication.Primary.PodIndex = newPrimary
 	})
 	errBundle = multierror.Append(errBundle, err)
