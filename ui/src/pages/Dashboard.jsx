@@ -4,6 +4,7 @@ import { Plus, Search, RefreshCw, Database, Server, HardDrive, Clock,
          ChevronDown, SlidersHorizontal } from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
+import { getSettings } from '../lib/settings'
 
 const statusStyle = {
   Running:    { bg: 'rgba(63,185,80,0.1)',  color: '#3fb950', dot: '#3fb950' },
@@ -208,7 +209,7 @@ export default function Dashboard({ setPage: navigate }) {
   // filters
   const [filterStatus,    setFilterStatus]    = useState('')
   const [filterType,      setFilterType]      = useState('')
-  const [filterNamespace, setFilterNamespace] = useState('')
+  const [filterNamespace, setFilterNamespace] = useState(getSettings().defaultNamespace)
 
   // delete
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -231,7 +232,7 @@ export default function Dashboard({ setPage: navigate }) {
     }
   }, [])
 
-  const { count, reset, total, paused, togglePause } = useAutoRefresh(fetchInstances)
+  const { count, reset, total, paused, togglePause } = useAutoRefresh(fetchInstances, getSettings().refreshInterval)
   useEffect(() => { fetchInstances() }, [fetchInstances])
 
   const handleDelete = async () => {

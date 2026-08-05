@@ -24,6 +24,10 @@ function buildSecret(form) {
   const literals = [`--from-literal=root-password=${form.rootPassword}`]
   if (form.topology !== 'standalone' && form.replPassword)
     literals.push(`--from-literal=password=${form.replPassword}`)
+  if (form.initialDatabase?.trim() && form.initialPassword)
+    literals.push(`--from-literal=initial-password=${form.initialPassword}`)
+  if (form.metrics && form.metricsUsername?.trim() && form.metricsPassword)
+    literals.push(`--from-literal=metrics-password=${form.metricsPassword}`)
   return literals
 }
 
@@ -44,6 +48,13 @@ function buildYAML(form) {
     `    size: ${form.storage}`,
     `    storageClassName: ${form.storageClass}`,
   ]
+  if (form.initialDatabase?.trim()) {
+    lines.push(`  username: ${form.initialUsername}`)
+    lines.push(`  database: ${form.initialDatabase}`)
+    lines.push(`  passwordSecretKeyRef:`)
+    lines.push(`    name: ${form.name}`)
+    lines.push(`    key: initial-password`)
+  }
   if (form.topology === 'replication') {
     lines.push(`  replication:`)
     lines.push(`    enabled: true`)
@@ -82,6 +93,50 @@ function buildYAML(form) {
   if (form.metrics) {
     lines.push(`  metrics:`)
     lines.push(`    enabled: true`)
+    if (form.metricsUsername?.trim()) {
+      lines.push(`    username: ${form.metricsUsername}`)
+      lines.push(`    passwordSecretKeyRef:`)
+      lines.push(`      name: ${form.name}`)
+      lines.push(`      key: metrics-password`)
+    }
+  }
+  if (form.pmmEnabled) {
+    const pmmImage = form.pmmImage?.trim() || 'percona/pmm-client:3'
+    lines.push(`  sidecarContainers:`)
+    lines.push(`    - name: pmm-client`)
+    lines.push(`      image: ${pmmImage}`)
+    lines.push(`      env:`)
+    lines.push(`        - name: PMM_AGENT_SERVER_ADDRESS`)
+    lines.push(`          value: "${form.pmmServerAddress}"`)
+    lines.push(`        - name: PMM_AGENT_SERVER_USERNAME`)
+    lines.push(`          valueFrom:`)
+    lines.push(`            secretKeyRef:`)
+    lines.push(`              name: ${form.name}-pmm-server`)
+    lines.push(`              key: username`)
+    lines.push(`        - name: PMM_AGENT_SERVER_PASSWORD`)
+    lines.push(`          valueFrom:`)
+    lines.push(`            secretKeyRef:`)
+    lines.push(`              name: ${form.name}-pmm-server`)
+    lines.push(`              key: password`)
+    lines.push(`        - name: PMM_AGENT_SERVER_INSECURE_TLS`)
+    lines.push(`          value: "${!!form.pmmInsecureTls}"`)
+    lines.push(`        - name: PMM_AGENT_CONFIG_FILE`)
+    lines.push(`          value: "config/pmm-agent.yaml"`)
+    lines.push(`        - name: PMM_AGENT_SETUP`)
+    lines.push(`          value: "1"`)
+    lines.push(`        - name: PMM_AGENT_SETUP_FORCE`)
+    lines.push(`          value: "1"`)
+    lines.push(`        - name: PMM_AGENT_SIDECAR`)
+    lines.push(`          value: "1"`)
+    lines.push(`        - name: PMM_DB_USERNAME`)
+    lines.push(`          value: "${form.pmmDbUsername}"`)
+    lines.push(`        - name: PMM_DB_PASSWORD`)
+    lines.push(`          valueFrom:`)
+    lines.push(`            secretKeyRef:`)
+    lines.push(`              name: ${form.name}-pmm-db`)
+    lines.push(`              key: password`)
+    lines.push(`        - name: PMM_AGENT_PRERUN_SCRIPT`)
+    lines.push(`          value: "pmm-admin status --wait=10s; pmm-admin add mysql --username=\${PMM_DB_USERNAME} --password=\${PMM_DB_PASSWORD} --host=127.0.0.1 --port=3306 --service-name=${form.name} --query-source=perfschema"`)
   }
   return lines.join('\n')
 }
@@ -173,6 +228,139 @@ function toHelmYAML(obj, indent = 0) {
   }).filter(Boolean).join('\n')
 }
 
+// ── generic CRD resources (Database/User/Grant/Backup/Restore/PhysicalBackup/       ──
+// ── PointInTimeRecovery/SqlJob/Connection/MaxScale/ExternalMariaDB) ─────────────────
+//
+// All of these are plain k8s.mariadb.com custom resources, so instead of hand-writing
+// list/create/delete handlers per kind (11x near-identical code), we validate the kind
+// against a whitelist and drive `kubectl` generically. Creates go through `kubectl apply
+// -f -` with the YAML piped over stdin (never interpolated into a shell command), and
+// list/get/delete use execFile with an argv array (no shell involved at all), since these
+// endpoints handle a lot more free-form user input (SQL text, arbitrary names) than the
+// rest of this file.
+const execFileAsync = promisify(execFile)
+
+const CRD_REGISTRY = {
+  database:            { kind: 'Database',            plural: 'databases',             scope: 'instance' },
+  user:                 { kind: 'User',                 plural: 'users',                  scope: 'instance' },
+  grant:                { kind: 'Grant',                plural: 'grants',                 scope: 'instance' },
+  backup:               { kind: 'Backup',               plural: 'backups',                scope: 'instance' },
+  restore:              { kind: 'Restore',              plural: 'restores',               scope: 'instance' },
+  physicalbackup:       { kind: 'PhysicalBackup',       plural: 'physicalbackups',        scope: 'instance' },
+  pointintimerecovery:  { kind: 'PointInTimeRecovery',  plural: 'pointintimerecoveries',  scope: 'namespace' },
+  sqljob:                { kind: 'SqlJob',                plural: 'sqljobs',                 scope: 'instance' },
+  connection:           { kind: 'Connection',           plural: 'connections',            scope: 'instance' },
+  maxscale:             { kind: 'MaxScale',             plural: 'maxscales',              scope: 'namespace' },
+  externalmariadb:      { kind: 'ExternalMariaDB',      plural: 'externalmariadbs',       scope: 'namespace' },
+}
+
+function crdEntry(kindParam) {
+  return CRD_REGISTRY[String(kindParam || '').toLowerCase()]
+}
+
+function buildCRYAML(apiKind, metadata, spec) {
+  const lines = [
+    `apiVersion: k8s.mariadb.com/v1alpha1`,
+    `kind: ${apiKind}`,
+    `metadata:`,
+    `  name: ${JSON.stringify(metadata.name)}`,
+    `  namespace: ${JSON.stringify(metadata.namespace)}`,
+  ]
+  const specYAML = toHelmYAML(spec, 2)
+  if (specYAML) lines.push(`spec:`, specYAML)
+  return lines.join('\n') + '\n'
+}
+
+// List instances of a CRD kind. Instance-scoped kinds are additionally filtered by
+// spec.mariaDbRef.name (or spec.physicalBackupRef.name for PointInTimeRecovery) when a
+// `mariadb`/`ref` query param is given, so a single MariaDB instance's detail page only
+// sees resources that actually belong to it.
+app.get('/api/crd/:kind', async (req, res) => {
+  const entry = crdEntry(req.params.kind)
+  if (!entry) return res.status(400).json({ error: `unknown resource kind: ${req.params.kind}` })
+  const { namespace, ref, refField } = req.query
+  if (!namespace) return res.status(400).json({ error: 'namespace is required' })
+  try {
+    const { stdout } = await execFileAsync('kubectl', ['get', entry.plural, '-n', namespace, '-o', 'json'])
+    let items = JSON.parse(stdout).items
+    if (ref && refField) {
+      items = items.filter(i => i.spec?.[refField]?.name === ref)
+    }
+    res.json({
+      items: items.map(i => ({
+        name: i.metadata.name,
+        namespace: i.metadata.namespace,
+        creationTimestamp: i.metadata.creationTimestamp,
+        spec: i.spec,
+        status: i.status,
+      })),
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Create a CRD instance. Body: { namespace, name, spec }
+app.post('/api/crd/:kind', async (req, res) => {
+  const entry = crdEntry(req.params.kind)
+  if (!entry) return res.status(400).json({ error: `unknown resource kind: ${req.params.kind}` })
+  const { namespace, name, spec } = req.body
+  if (!namespace || !name) return res.status(400).json({ error: 'namespace and name are required' })
+  try {
+    const yaml = buildCRYAML(entry.kind, { name, namespace }, spec || {})
+    await new Promise((resolve, reject) => {
+      const child = exec(`kubectl apply -f -`, (err, stdout, stderr) =>
+        err ? reject(new Error(stderr || err.message)) : resolve(stdout))
+      child.stdin.write(yaml)
+      child.stdin.end()
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Delete a CRD instance.
+app.delete('/api/crd/:kind/:namespace/:name', async (req, res) => {
+  const entry = crdEntry(req.params.kind)
+  if (!entry) return res.status(400).json({ error: `unknown resource kind: ${req.params.kind}` })
+  const { namespace, name } = req.params
+  try {
+    await execFileAsync('kubectl', ['delete', entry.plural, name, '-n', namespace, '--ignore-not-found'])
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Create or update a generic Secret with literal key/value pairs. Shared by the /api/secrets
+// route (used by the CRD create forms) and /api/deploy (used by the New Instance wizard's
+// optional S3 backup step) so there's one place that knows how to do this safely.
+async function applySecret(namespace, name, literals) {
+  const args = ['create', 'secret', 'generic', name, '-n', namespace]
+  for (const [k, v] of Object.entries(literals)) args.push(`--from-literal=${k}=${v}`)
+  const { stdout: dryRunYAML } = await execFileAsync('kubectl', [...args, '--dry-run=client', '-o', 'yaml'])
+  await new Promise((resolve, reject) => {
+    const child = exec(`kubectl apply -f -`, (err, stdout, stderr) =>
+      err ? reject(new Error(stderr || err.message)) : resolve(stdout))
+    child.stdin.write(dryRunYAML)
+    child.stdin.end()
+  })
+}
+
+// Body: { namespace, name, literals: { key: value } }
+app.post('/api/secrets', async (req, res) => {
+  const { namespace, name, literals } = req.body
+  if (!namespace || !name || !literals || !Object.keys(literals).length)
+    return res.status(400).json({ error: 'namespace, name and at least one literal are required' })
+  try {
+    await applySecret(namespace, name, literals)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // List namespaces
 app.get('/api/namespaces', async (req, res) => {
   try {
@@ -183,6 +371,26 @@ app.get('/api/namespaces', async (req, res) => {
       .map(n => n.metadata.name)
       .sort()
     res.json({ namespaces })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// List StorageClasses actually available in the cluster (e.g. site-specific ones like
+// netapp-san-ssd-dc1/dc2/dc3), so the New Instance wizard's Storage Class field isn't stuck
+// offering a hardcoded, possibly-wrong list. Cluster-scoped, no namespace filter.
+app.get('/api/storageclasses', async (req, res) => {
+  try {
+    const { stdout } = await execFileAsync('kubectl', ['get', 'storageclass', '-o', 'json'])
+    const items = JSON.parse(stdout).items
+    const storageClasses = items
+      .map(sc => ({
+        name: sc.metadata.name,
+        isDefault: sc.metadata.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true',
+        provisioner: sc.provisioner,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    res.json({ storageClasses })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -245,6 +453,8 @@ app.post('/api/deploy', async (req, res) => {
     return res.status(400).json({ error: 'name, namespace and rootPassword are required' })
   if (topology !== 'standalone' && !replPassword)
     return res.status(400).json({ error: 'replPassword is required for replication/galera' })
+  if (form.pmmEnabled && (!form.pmmServerAddress || !form.pmmServerPassword || !form.pmmDbUsername || !form.pmmDbPassword))
+    return res.status(400).json({ error: 'pmmServerAddress, pmmServerPassword, pmmDbUsername and pmmDbPassword are required when PMM monitoring is enabled' })
 
   const steps = []
   try {
@@ -261,6 +471,17 @@ app.post('/api/deploy', async (req, res) => {
     )
     steps.push(`Secret "${name}" created`)
 
+    // 2b. Optional Percona PMM monitoring — two more Secrets (PMM Server auth,
+    // DB monitoring user) referenced by the sidecarContainers env below. Created via
+    // applySecret (execFile, no shell interpolation of the password value) same as the
+    // backup S3 credentials further down, rather than folded into the single `literalArgs`
+    // string above.
+    if (form.pmmEnabled) {
+      await applySecret(namespace, `${name}-pmm-server`, { username: form.pmmServerUsername, password: form.pmmServerPassword })
+      await applySecret(namespace, `${name}-pmm-db`, { password: form.pmmDbPassword })
+      steps.push(`PMM credential Secrets created`)
+    }
+
     // 3. Apply MariaDB manifest via stdin
     const yaml = buildYAML(form)
     await new Promise((resolve, reject) => {
@@ -275,6 +496,46 @@ app.post('/api/deploy', async (req, res) => {
       child.stdin.end()
     })
     steps.push(`MariaDB "${name}" applied`)
+
+    // 4. Optional recurring Backup, created as a separate Backup CR (same mechanism as the
+    // Backups tab on the instance detail page) so it shows up there too.
+    if (form.backupEnabled) {
+      const cron = form.backupPreset === 'custom' ? form.backupCronCustom : form.backupPreset
+      const backupName = `${name}-backup`
+      const backupSpec = {
+        mariaDbRef: { name },
+        schedule: { cron },
+        compression: form.backupCompression || 'none',
+      }
+      if (form.backupStorageType === 'S3') {
+        const accessKeySecret = `${backupName}-access-key-id`
+        const secretKeySecret = `${backupName}-secret-access-key`
+        await applySecret(namespace, accessKeySecret, { accessKeyId: form.backupS3AccessKeyId })
+        await applySecret(namespace, secretKeySecret, { secretAccessKey: form.backupS3SecretAccessKey })
+        steps.push(`S3 credential Secrets created`)
+        backupSpec.storage = {
+          s3: {
+            endpoint: form.backupS3Endpoint,
+            bucket: form.backupS3Bucket,
+            region: form.backupS3Region || undefined,
+            prefix: form.backupS3Prefix || undefined,
+            accessKeyIdSecretKeyRef: { name: accessKeySecret, key: 'accessKeyId' },
+            secretAccessKeySecretKeyRef: { name: secretKeySecret, key: 'secretAccessKey' },
+            tls: form.backupS3Tls ? { enabled: true } : undefined,
+          },
+        }
+      } else {
+        backupSpec.storage = { persistentVolumeClaim: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: form.backupStorageSize || '1Gi' } } } }
+      }
+      const backupYAML = buildCRYAML('Backup', { name: backupName, namespace }, backupSpec)
+      await new Promise((resolve, reject) => {
+        const child = exec(`kubectl apply -f -`, (err, stdout, stderr) =>
+          err ? reject(new Error(stderr || err.message)) : resolve(stdout))
+        child.stdin.write(backupYAML)
+        child.stdin.end()
+      })
+      steps.push(`Scheduled Backup "${name}-backup" applied (${cron})`)
+    }
 
     res.json({ ok: true, steps, yaml })
   } catch (err) {
@@ -431,6 +692,57 @@ app.get('/api/instances/:namespace/:name/events', async (req, res) => {
         lastTime: e.lastTimestamp,
       }))
     res.json({ events })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Get recent events across all MariaDB instances, in every namespace (used by the
+// Activity page). Scoping mirrors the per-instance endpoint above (name-prefix match
+// against involvedObject.name) but applied to every known instance, so it only surfaces
+// events actually related to a MariaDB CR or the Pods/StatefulSets/Jobs it owns —
+// not unrelated cluster noise.
+app.get('/api/events', async (req, res) => {
+  try {
+    const [instancesOut, eventsOut] = await Promise.all([
+      execAsync(`kubectl get mariadb -A -o json`),
+      execAsync(`kubectl get events -A --sort-by='.lastTimestamp' -o json`),
+    ])
+    const instances = JSON.parse(instancesOut.stdout).items.map(i => ({
+      name: i.metadata.name,
+      namespace: i.metadata.namespace,
+    }))
+    const allEvents = JSON.parse(eventsOut.stdout).items
+    const events = allEvents
+      .filter(e => instances.some(i => i.namespace === e.metadata.namespace && e.involvedObject.name.startsWith(i.name)))
+      .slice(-50)
+      .reverse()
+      .map(e => ({
+        type: e.type,
+        reason: e.reason,
+        namespace: e.metadata.namespace,
+        object: e.involvedObject.name,
+        kind: e.involvedObject.kind,
+        message: e.message,
+        count: e.count,
+        lastTime: e.lastTimestamp,
+      }))
+    res.json({ events })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Read-only connection info for the Settings page: which Helm release/namespace this UI
+// is wired to manage, and which kubeconfig context the backend is using. No mutation.
+app.get('/api/connection', async (req, res) => {
+  try {
+    const { stdout } = await execAsync('kubectl config current-context').catch(() => ({ stdout: '' }))
+    res.json({
+      context: stdout.trim() || '—',
+      releaseName: HELM_RELEASE_NAME,
+      releaseNamespace: HELM_RELEASE_NAMESPACE,
+    })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

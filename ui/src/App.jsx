@@ -3,7 +3,9 @@ import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import CreateMariaDB from './pages/CreateMariaDB'
 import InstanceDetail from './pages/InstanceDetail'
-import HelmValues from './pages/HelmValues'
+import Activity from './pages/Activity'
+import Docs from './pages/Docs'
+import Settings from './pages/Settings'
 import './index.css'
 
 export default function App() {
@@ -24,7 +26,9 @@ export default function App() {
         {page === 'dashboard' && <Dashboard setPage={navigate} />}
         {page === 'create'    && <CreateMariaDB setPage={navigate} />}
         {page === 'detail'    && <InstanceDetail instanceKey={selectedInstance} setPage={navigate} />}
-        {page === 'helm'      && <HelmValues />}
+        {page === 'activity'  && <Activity />}
+        {page === 'docs'      && <Docs />}
+        {page === 'settings'  && <Settings />}
       </main>
     </div>
   )

@@ -1,22 +1,45 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, ArrowRight, Check, Database, Server, Shield, HardDrive, Zap, ChevronDown, Eye, EyeOff, Info, Loader2, AlertCircle, CheckCircle2, Copy, X, Cpu } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Database, Server, Shield, HardDrive, Zap, ChevronDown, Eye, EyeOff, Info, Loader2, AlertCircle, CheckCircle2, Copy, X, Cpu, Archive, GitBranch, Network } from 'lucide-react'
 
 const STEPS = [
   { id: 'basic',    label: 'Basics',   icon: Database },
   { id: 'topology', label: 'Topology', icon: Server },
   { id: 'storage',  label: 'Storage',  icon: HardDrive },
   { id: 'security', label: 'Security', icon: Shield },
+  { id: 'backup',   label: 'Backup',   icon: Archive },
   { id: 'review',   label: 'Review',   icon: Check },
 ]
 
-const TOPOLOGY_OPTIONS = [
-  { id: 'standalone',  label: 'Standalone',     desc: 'Single instance. Simple, lowest cost.',                replicas: 1, icon: '○', tag: null },
-  { id: 'replication', label: 'Replication',     desc: 'Primary + replicas with automatic failover.',          replicas: 3, icon: '⇌', tag: 'Recommended' },
-  { id: 'galera',      label: 'Galera Cluster',  desc: 'Synchronous multi-primary write anywhere.',            replicas: 3, icon: '◉', tag: 'High Availability' },
+// Common cron schedules for the optional recurring Backup. "Custom" reveals a free-text
+// cron field instead — see StepBackup below.
+const BACKUP_PRESETS = [
+  { value: '0 */6 * * *', label: 'Every 6 hours' },
+  { value: '0 3 * * *',   label: 'Daily at 03:00' },
+  { value: '0 3 * * 0',   label: 'Weekly (Sunday 03:00)' },
+  { value: 'custom',      label: 'Custom cron expression' },
 ]
 
-const VERSION_OPTIONS       = ['11.8.5', '11.4.4', '10.11.10', '10.6.20']
-const STORAGE_CLASS_OPTIONS = ['standard', 'csi-hostpath-sc', 'managed-premium']
+// HA gets its own colour (green, "this is reliable") separate from Recommended (orange,
+// "this is the suggested default") since Replication now carries both — they mean different
+// things and showing HA only on Galera implied Replication with 3 replicas + failover wasn't
+// also HA, which isn't true.
+// Sync-mode tags use a third colour (blue) to stay visually distinct from Recommended
+// (orange) and HA (green) — they're a different axis of information, not a ranking.
+// Wording matters here: Replication defaults to semi-sync (an ack from ≥1 replica before
+// commit); Galera is "virtually synchronous" (certification-based) — not the same guarantee
+// as strict/full synchronous replication, so it's deliberately not labelled "Full Sync".
+const TAG_RECOMMENDED   = { label: 'Recommended', color: '#f97316' }
+const TAG_HA            = { label: 'High Availability', color: '#3fb950' }
+const TAG_SEMI_SYNC     = { label: 'Semi Sync', color: '#58a6ff' }
+const TAG_VIRTUALLY_SYNC = { label: 'Virtually Sync', color: '#58a6ff' }
+
+const TOPOLOGY_OPTIONS = [
+  { id: 'standalone',  label: 'Standalone',     desc: 'Single instance. Simple, lowest cost.',                replicas: 1, icon: Server,    tags: [] },
+  { id: 'replication', label: 'Replication',     desc: 'Primary + replicas with automatic failover.',          replicas: 3, icon: GitBranch, tags: [TAG_RECOMMENDED, TAG_HA, TAG_SEMI_SYNC] },
+  { id: 'galera',      label: 'Galera Cluster',  desc: 'Virtually synchronous multi-primary write anywhere.',  replicas: 3, icon: Network,   tags: [TAG_HA, TAG_VIRTUALLY_SYNC] },
+]
+
+const VERSION_OPTIONS = ['11.8.5', '11.4.4', '10.11.10', '10.6.20']
 
 const RESOURCE_PRESETS = [
   { id: 'micro',  label: 'Micro',  cpuReq: '250m',  cpuLim: '500m',  memReq: '256Mi', memLim: '512Mi' },
@@ -168,7 +191,7 @@ function StepBasics({ form, update, errors }) {
   )
 }
 
-function StepTopology({ form, update }) {
+function StepTopology({ form, update, errors }) {
   return (
     <div className="space-y-5">
       <div>
@@ -184,11 +207,15 @@ function StepTopology({ form, update }) {
               className="w-full flex items-start gap-4 p-4 rounded-xl border text-left transition-all"
               style={{ background: selected ? 'rgba(249,115,22,0.08)' : '#0d1117', borderColor: selected ? '#f97316' : '#30363d' }}
             >
-              <span className="text-2xl leading-none mt-0.5">{opt.icon}</span>
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: selected ? 'rgba(249,115,22,0.15)' : '#161b22' }}>
+                <opt.icon size={18} color={selected ? '#f97316' : '#8b949e'} />
+              </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-0.5">
                   <span className="text-sm font-semibold" style={{ color: '#e6edf3' }}>{opt.label}</span>
-                  {opt.tag && <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: 'rgba(249,115,22,0.15)', color: '#f97316' }}>{opt.tag}</span>}
+                  {opt.tags.map(t => (
+                    <span key={t.label} className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: t.color + '26', color: t.color }}>{t.label}</span>
+                  ))}
                 </div>
                 <span className="text-xs" style={{ color: '#8b949e' }}>{opt.desc}</span>
               </div>
@@ -201,15 +228,16 @@ function StepTopology({ form, update }) {
       </div>
       {form.topology !== 'standalone' && (
         <div>
-          <Label hint="Number of MariaDB pods">Replicas</Label>
+          <Label hint="mariadb-operator requires 2+ replicas whenever replication or Galera is enabled — 1 replica gets rejected by its admission webhook.">Replicas</Label>
           <div className="flex items-center gap-3">
-            {[1, 2, 3, 5, 7].map(n => (
+            {[2, 3, 5, 7].map(n => (
               <button key={n} type="button" onClick={() => update('replicas', n)}
                 className="w-11 h-11 rounded-lg text-sm font-semibold border transition-all"
                 style={{ background: form.replicas === n ? 'rgba(249,115,22,0.15)' : '#0d1117', borderColor: form.replicas === n ? '#f97316' : '#30363d', color: form.replicas === n ? '#f97316' : '#8b949e' }}
               >{n}</button>
             ))}
           </div>
+          {errors.replicas && <p className="text-xs mt-1" style={{ color: '#f85149' }}>{errors.replicas}</p>}
           {form.topology === 'replication' && (
             <div className="mt-4 flex items-center gap-6">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -231,6 +259,14 @@ function StepTopology({ form, update }) {
 function StepStorage({ form, update }) {
   const sizes = ['1Gi', '5Gi', '10Gi', '20Gi', '50Gi', '100Gi']
   const isCustom = form.resourcePreset === 'custom'
+  const [storageClasses, setStorageClasses] = useState(null) // null = still loading
+
+  useEffect(() => {
+    fetch('/api/storageclasses')
+      .then(r => r.json())
+      .then(d => setStorageClasses(d.storageClasses ?? []))
+      .catch(() => setStorageClasses([]))
+  }, [])
 
   const selectPreset = (preset) => {
     update('resourcePreset', preset.id)
@@ -268,7 +304,30 @@ function StepStorage({ form, update }) {
         </div>
       </div>
 
-      <Select label="Storage Class" hint="Kubernetes StorageClass for PVCs" options={STORAGE_CLASS_OPTIONS} value={form.storageClass} onChange={v => update('storageClass', v)} />
+      <Input
+        label="Storage Class"
+        hint={storageClasses === null ? 'Loading StorageClasses from the cluster…' : 'Pick a suggestion below or type any StorageClass name — e.g. netapp-san-ssd-dc1'}
+        list="storage-class-options"
+        value={form.storageClass}
+        onChange={e => update('storageClass', e.target.value)}
+        placeholder="standard"
+      />
+      <datalist id="storage-class-options">
+        {(storageClasses ?? []).map(sc => (
+          <option key={sc.name} value={sc.name}>{sc.isDefault ? `${sc.name} (default)` : sc.name}</option>
+        ))}
+      </datalist>
+      {form.replicas > 1 && (
+        <div className="flex items-start gap-2 text-xs px-3 py-2 rounded-lg" style={{ background: 'rgba(88,166,255,0.08)', color: '#79c0ff' }}>
+          <Info size={13} className="flex-shrink-0 mt-0.5" />
+          <span>
+            This one StorageClass is used for all {form.replicas} replicas — mariadb-operator doesn't support a different StorageClass per replica.
+            To spread replicas across DC-specific classes like <code>netapp-san-ssd-dc1/dc2/dc3</code>, the usual pattern is a single topology-aware
+            StorageClass (<code>volumeBindingMode: WaitForFirstConsumer</code> + <code>allowedTopologies</code>) combined with pod topology spread —
+            that's cluster/CSI-driver configuration outside this form.
+          </span>
+        </div>
+      )}
 
       {/* Service type */}
       <div>
@@ -362,24 +421,195 @@ function StepSecurity({ form, update, errors }) {
         <h2 className="text-base font-semibold mb-0.5" style={{ color: '#e6edf3' }}>Security</h2>
         <p className="text-sm" style={{ color: '#8b949e' }}>Configure passwords and TLS settings.</p>
       </div>
-      <PasswordInput label="Root Password" hint="Password for the root MariaDB user" value={form.rootPassword} onChange={v => update('rootPassword', v)} placeholder="Enter root password" error={errors.rootPassword} />
-      {form.topology !== 'standalone' && (
-        <PasswordInput label="Replication Password" hint="Used by replicas to connect to primary" value={form.replPassword} onChange={v => update('replPassword', v)} placeholder="Enter replication password" error={errors.replPassword} />
-      )}
-      <div className="rounded-xl border p-4 space-y-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
-        {[
-          { key: 'tls', label: 'Enable TLS', desc: 'Encrypt connections using auto-generated certificates' },
-          { key: 'metrics', label: 'Metrics', desc: 'Export Prometheus metrics via mysqld-exporter' },
-        ].map(({ key, label, desc }) => (
-          <div key={key} className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>{label}</div>
-              <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{desc}</div>
-            </div>
-            <Toggle checked={form[key]} onChange={v => update(key, v)} />
-          </div>
-        ))}
+      <div className="grid grid-cols-2 gap-4">
+        <PasswordInput label="Root Password" hint="Password for the root MariaDB user" value={form.rootPassword} onChange={v => update('rootPassword', v)} placeholder="Enter root password" error={errors.rootPassword} />
+        <PasswordInput label="Confirm Root Password" value={form.rootPasswordConfirm} onChange={v => update('rootPasswordConfirm', v)} placeholder="Re-enter root password" error={errors.rootPasswordConfirm} />
       </div>
+      {form.topology !== 'standalone' && (
+        <div className="grid grid-cols-2 gap-4">
+          <PasswordInput label="Replication Password" hint="Used by replicas to connect to primary" value={form.replPassword} onChange={v => update('replPassword', v)} placeholder="Enter replication password" error={errors.replPassword} />
+          <PasswordInput label="Confirm Replication Password" value={form.replPasswordConfirm} onChange={v => update('replPasswordConfirm', v)} placeholder="Re-enter replication password" error={errors.replPasswordConfirm} />
+        </div>
+      )}
+
+      <div className="rounded-xl border p-4 space-y-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
+        <div>
+          <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Initial database &amp; user</div>
+          <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>Optional — the operator creates this database and a non-root user with ALL PRIVILEGES on it at first boot. Leave the database name blank to skip; you can always add databases/users afterwards from the instance's CRDs tab.</div>
+        </div>
+        <Input label="Database name" value={form.initialDatabase} onChange={e => update('initialDatabase', e.target.value)} placeholder="e.g. myapp" error={errors.initialDatabase} />
+        {form.initialDatabase.trim() && (
+          <>
+            <Input label="Username" value={form.initialUsername} onChange={e => update('initialUsername', e.target.value)} placeholder="e.g. myapp" error={errors.initialUsername} />
+            <div className="grid grid-cols-2 gap-4">
+              <PasswordInput label="Password" value={form.initialPassword} onChange={v => update('initialPassword', v)} error={errors.initialPassword} />
+              <PasswordInput label="Confirm Password" value={form.initialPasswordConfirm} onChange={v => update('initialPasswordConfirm', v)} error={errors.initialPasswordConfirm} />
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="rounded-xl border p-4 space-y-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Enable TLS</div>
+            <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>Encrypt connections using auto-generated certificates</div>
+          </div>
+          <Toggle checked={form.tls} onChange={v => update('tls', v)} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border p-4 space-y-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Metrics</div>
+            <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>Export Prometheus metrics via mysqld-exporter</div>
+          </div>
+          <Toggle checked={form.metrics} onChange={v => update('metrics', v)} />
+        </div>
+        {form.metrics && (
+          <>
+            <div className="text-xs" style={{ color: '#8b949e' }}>Monitoring user credentials — leave both blank to let the operator generate and manage them automatically.</div>
+            <Input label="Username (optional)" value={form.metricsUsername} onChange={e => update('metricsUsername', e.target.value)} placeholder="Auto-generated if blank" error={errors.metricsUsername} />
+            {form.metricsUsername.trim() && (
+              <div className="grid grid-cols-2 gap-4">
+                <PasswordInput label="Password" value={form.metricsPassword} onChange={v => update('metricsPassword', v)} error={errors.metricsPassword} />
+                <PasswordInput label="Confirm Password" value={form.metricsPasswordConfirm} onChange={v => update('metricsPasswordConfirm', v)} error={errors.metricsPasswordConfirm} />
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="rounded-xl border p-4 space-y-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Percona PMM Monitoring</div>
+            <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>Adds a pmm-client sidecar that registers this instance with an existing PMM Server for query analytics and dashboards. Requires a PMM Server already running somewhere reachable from this cluster — this only wires up the agent, it doesn't deploy PMM Server itself.</div>
+          </div>
+          <Toggle checked={form.pmmEnabled} onChange={v => update('pmmEnabled', v)} />
+        </div>
+        {form.pmmEnabled && (
+          <>
+            <Input
+              label="PMM Server address" hint="Host:port of your PMM Server, e.g. pmm-server.monitoring.svc.cluster.local:443"
+              value={form.pmmServerAddress} onChange={e => update('pmmServerAddress', e.target.value)}
+              placeholder="pmm-server.monitoring.svc.cluster.local:443" error={errors.pmmServerAddress}
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="PMM Server username" value={form.pmmServerUsername} onChange={e => update('pmmServerUsername', e.target.value)} placeholder="admin" error={errors.pmmServerUsername} />
+              <PasswordInput label="PMM Server password" value={form.pmmServerPassword} onChange={v => update('pmmServerPassword', v)} error={errors.pmmServerPassword} />
+            </div>
+            <PasswordInput label="Confirm PMM Server password" value={form.pmmServerPasswordConfirm} onChange={v => update('pmmServerPasswordConfirm', v)} error={errors.pmmServerPasswordConfirm} />
+            <div className="flex items-center justify-between">
+              <div className="text-xs" style={{ color: '#8b949e' }}>Skip TLS certificate verification (common with self-signed PMM Server certs)</div>
+              <Toggle checked={form.pmmInsecureTls} onChange={v => update('pmmInsecureTls', v)} />
+            </div>
+            <Input
+              label="PMM Client image" hint="percona/pmm-client:3 for a PMM 3 Server, percona/pmm-client:2 for PMM 2 — must match your PMM Server's major version"
+              value={form.pmmImage} onChange={e => update('pmmImage', e.target.value)} placeholder="percona/pmm-client:3"
+            />
+            <div className="text-xs" style={{ color: '#8b949e' }}>
+              Database monitoring user — pmm-agent connects to this instance locally (127.0.0.1:3306) with these credentials via
+              <code> pmm-admin add mysql</code>. This user needs <code>SELECT, PROCESS, REPLICATION CLIENT, RELOAD</code> grants
+              (see Percona's PMM docs for the exact list for your MariaDB version). Create it via the instance's Users/Grants CRD
+              tab after deploying if it doesn't exist yet — this form only wires the connection, it doesn't create the database user.
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Database username" value={form.pmmDbUsername} onChange={e => update('pmmDbUsername', e.target.value)} placeholder="pmm" error={errors.pmmDbUsername} />
+              <PasswordInput label="Database password" value={form.pmmDbPassword} onChange={v => update('pmmDbPassword', v)} error={errors.pmmDbPassword} />
+            </div>
+            <PasswordInput label="Confirm database password" value={form.pmmDbPasswordConfirm} onChange={v => update('pmmDbPasswordConfirm', v)} error={errors.pmmDbPasswordConfirm} />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StepBackup({ form, update, errors }) {
+  const cron = form.backupPreset === 'custom' ? form.backupCronCustom : form.backupPreset
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold mb-0.5" style={{ color: '#e6edf3' }}>Backup</h2>
+        <p className="text-sm" style={{ color: '#8b949e' }}>Optionally set up a recurring backup for this instance, right from the start.</p>
+      </div>
+
+      <div className="rounded-xl border p-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Enable scheduled backups</div>
+            <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>Creates a <code>Backup</code> resource with a cron schedule (like a CronJob) alongside the instance.</div>
+          </div>
+          <Toggle checked={form.backupEnabled} onChange={v => update('backupEnabled', v)} />
+        </div>
+      </div>
+
+      {form.backupEnabled && (
+        <>
+          <div>
+            <Label hint="How often the backup runs. Same cron syntax as a Kubernetes CronJob.">Schedule</Label>
+            <div className="relative">
+              <select
+                value={form.backupPreset}
+                onChange={e => update('backupPreset', e.target.value)}
+                className="w-full px-3 py-2 rounded-lg text-sm border outline-none appearance-none pr-8 transition-colors"
+                style={{ background: '#0d1117', borderColor: '#30363d', color: '#e6edf3' }}
+              >
+                {BACKUP_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: '#8b949e' }} />
+            </div>
+          </div>
+
+          {form.backupPreset === 'custom' && (
+            <Input
+              label="Cron expression" hint="Standard 5-field cron syntax, e.g. 0 3 * * * for daily at 03:00"
+              value={form.backupCronCustom} onChange={e => update('backupCronCustom', e.target.value)}
+              placeholder="0 3 * * *" error={errors.backupCronCustom}
+            />
+          )}
+
+          <Select
+            label="Storage destination" options={['PersistentVolumeClaim', 'S3']} value={form.backupStorageType} onChange={v => update('backupStorageType', v)}
+          />
+
+          {form.backupStorageType === 'S3' ? (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <Input label="S3 Endpoint" hint="Host and port, no scheme — works with MinIO or any S3-compatible endpoint" value={form.backupS3Endpoint} onChange={e => update('backupS3Endpoint', e.target.value)} placeholder="minio.example.com:9000" error={errors.backupS3Endpoint} />
+                <Input label="Bucket" value={form.backupS3Bucket} onChange={e => update('backupS3Bucket', e.target.value)} placeholder="mariadb-backups" error={errors.backupS3Bucket} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <Input label="Region (optional)" value={form.backupS3Region} onChange={e => update('backupS3Region', e.target.value)} />
+                <Input label="Prefix (optional)" value={form.backupS3Prefix} onChange={e => update('backupS3Prefix', e.target.value)} placeholder="mariadb/backups" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <PasswordInput label="Access Key ID" value={form.backupS3AccessKeyId} onChange={v => update('backupS3AccessKeyId', v)} error={errors.backupS3AccessKeyId} />
+                <PasswordInput label="Secret Access Key" value={form.backupS3SecretAccessKey} onChange={v => update('backupS3SecretAccessKey', v)} error={errors.backupS3SecretAccessKey} />
+              </div>
+              <div className="flex items-center justify-between rounded-xl border p-4" style={{ background: '#0d1117', borderColor: '#30363d' }}>
+                <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Use TLS</div>
+                <Toggle checked={form.backupS3Tls} onChange={v => update('backupS3Tls', v)} />
+              </div>
+            </>
+          ) : (
+            <Input label="Backup storage size" value={form.backupStorageSize} onChange={e => update('backupStorageSize', e.target.value)} placeholder="1Gi" />
+          )}
+
+          <Select label="Compression" options={['none', 'bzip2', 'gzip']} value={form.backupCompression} onChange={v => update('backupCompression', v)} />
+
+          <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg" style={{ background: 'rgba(88,166,255,0.08)', color: '#79c0ff' }}>
+            <Info size={13} className="flex-shrink-0" />
+            Effective schedule: <code>{cron || '—'}</code>
+          </div>
+
+          <p className="text-xs" style={{ color: '#8b949e' }}>
+            Need VolumeSnapshot-based backups instead? Those use the <code>PhysicalBackup</code> CRD — set that up afterwards from the instance's <strong>CRDs</strong> tab, it supports S3, VolumeSnapshot and PVC destinations.
+          </p>
+        </>
+      )}
     </div>
   )
 }
@@ -410,6 +640,15 @@ function buildYAML(form) {
     `    size: ${form.storage}`,
     `    storageClassName: ${form.storageClass}`,
   ]
+  if (form.initialDatabase.trim()) {
+    lines.push(
+      `  username: ${form.initialUsername}`,
+      `  database: ${form.initialDatabase}`,
+      `  passwordSecretKeyRef:`,
+      `    name: ${form.name || 'my-mariadb'}`,
+      `    key: initial-password`,
+    )
+  }
   if (form.topology === 'replication') {
     lines.push(`  replication:`, `    enabled: true`, `    primary:`, `      autoFailover: ${form.autoFailover}`, `    replica:`, `      replPasswordSecretKeyRef:`, `        name: ${form.name || 'my-mariadb'}`, `        key: password`, `    semiSyncEnabled: ${form.semiSync}`)
   } else if (form.topology === 'galera') {
@@ -425,8 +664,58 @@ function buildYAML(form) {
     if (form.cpuLimit)   lines.push(`      cpu: "${form.cpuLimit}"`)
     if (form.memLimit)   lines.push(`      memory: "${form.memLimit}"`)
   }
-  if (form.tls)     lines.push(`  tls:`, `    enabled: true`)
-  if (form.metrics) lines.push(`  metrics:`, `    enabled: true`)
+  if (form.tls) lines.push(`  tls:`, `    enabled: true`)
+  if (form.metrics) {
+    lines.push(`  metrics:`, `    enabled: true`)
+    if (form.metricsUsername.trim()) {
+      lines.push(
+        `    username: ${form.metricsUsername}`,
+        `    passwordSecretKeyRef:`,
+        `      name: ${form.name || 'my-mariadb'}`,
+        `      key: metrics-password`,
+      )
+    }
+  }
+  if (form.pmmEnabled) {
+    const nm = form.name || 'my-mariadb'
+    lines.push(
+      `  sidecarContainers:`,
+      `    - name: pmm-client`,
+      `      image: ${form.pmmImage}`,
+      `      env:`,
+      `        - name: PMM_AGENT_SERVER_ADDRESS`,
+      `          value: "${form.pmmServerAddress}"`,
+      `        - name: PMM_AGENT_SERVER_USERNAME`,
+      `          valueFrom:`,
+      `            secretKeyRef:`,
+      `              name: ${nm}-pmm-server`,
+      `              key: username`,
+      `        - name: PMM_AGENT_SERVER_PASSWORD`,
+      `          valueFrom:`,
+      `            secretKeyRef:`,
+      `              name: ${nm}-pmm-server`,
+      `              key: password`,
+      `        - name: PMM_AGENT_SERVER_INSECURE_TLS`,
+      `          value: "${form.pmmInsecureTls}"`,
+      `        - name: PMM_AGENT_CONFIG_FILE`,
+      `          value: "config/pmm-agent.yaml"`,
+      `        - name: PMM_AGENT_SETUP`,
+      `          value: "1"`,
+      `        - name: PMM_AGENT_SETUP_FORCE`,
+      `          value: "1"`,
+      `        - name: PMM_AGENT_SIDECAR`,
+      `          value: "1"`,
+      `        - name: PMM_DB_USERNAME`,
+      `          value: "${form.pmmDbUsername}"`,
+      `        - name: PMM_DB_PASSWORD`,
+      `          valueFrom:`,
+      `            secretKeyRef:`,
+      `              name: ${nm}-pmm-db`,
+      `              key: password`,
+      `        - name: PMM_AGENT_PRERUN_SCRIPT`,
+      `          value: "pmm-admin status --wait=10s; pmm-admin add mysql --username=\${PMM_DB_USERNAME} --password=\${PMM_DB_PASSWORD} --host=127.0.0.1 --port=3306 --service-name=${nm} --query-source=perfschema"`,
+    )
+  }
   return lines.join('\n')
 }
 
@@ -452,8 +741,29 @@ function StepReview({ form }) {
         {form.memRequest && <ReviewRow label="Mem (req → lim)"  value={`${form.memRequest} → ${form.memLimit}`} />}
         {form.cpuRequest && <ReviewRow label="Total CPU (req)" value={fmtCPU(cpuMilli(form.cpuRequest) * form.replicas)} accent="#bc8cff" />}
         {form.memRequest && <ReviewRow label="Total Mem (req)" value={fmtMem(memMi(form.memRequest)   * form.replicas)} accent="#bc8cff" />}
+        <ReviewRow
+          label="Initial database"
+          value={form.initialDatabase.trim() ? `${form.initialDatabase} (user: ${form.initialUsername})` : 'None'}
+          accent={form.initialDatabase.trim() ? '#3fb950' : '#8b949e'}
+        />
         <ReviewRow label="TLS"     value={form.tls ? 'Enabled' : 'Disabled'}     accent={form.tls ? '#3fb950' : '#8b949e'} />
-        <ReviewRow label="Metrics" value={form.metrics ? 'Enabled' : 'Disabled'} accent={form.metrics ? '#3fb950' : '#8b949e'} />
+        <ReviewRow
+          label="Metrics"
+          value={form.metrics ? (form.metricsUsername.trim() ? `Enabled (user: ${form.metricsUsername})` : 'Enabled (auto-managed user)') : 'Disabled'}
+          accent={form.metrics ? '#3fb950' : '#8b949e'}
+        />
+        <ReviewRow
+          label="Percona PMM"
+          value={form.pmmEnabled ? `Enabled (server: ${form.pmmServerAddress || '—'})` : 'Disabled'}
+          accent={form.pmmEnabled ? '#3fb950' : '#8b949e'}
+        />
+        <ReviewRow
+          label="Scheduled backup"
+          value={form.backupEnabled
+            ? `${form.backupPreset === 'custom' ? form.backupCronCustom : form.backupPreset} → ${form.backupStorageType === 'S3' ? `S3 (${form.backupS3Bucket})` : form.backupStorageSize}`
+            : 'Disabled'}
+          accent={form.backupEnabled ? '#3fb950' : '#8b949e'}
+        />
       </div>
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -531,9 +841,44 @@ function validate(step, form) {
   const errors = {}
   if (step === 0 && !form.name.trim()) errors.name = 'Instance name is required'
   if (step === 0 && !/^[a-z0-9-]+$/.test(form.name)) errors.name = 'Use lowercase letters, numbers and hyphens only'
+  if (step === 1 && form.topology !== 'standalone' && form.replicas <= 1) {
+    errors.replicas = "mariadb-operator requires 2+ replicas when replication or Galera is enabled"
+  }
   if (step === 3) {
     if (!form.rootPassword) errors.rootPassword = 'Root password is required'
-    if (form.topology !== 'standalone' && !form.replPassword) errors.replPassword = 'Replication password is required'
+    else if (form.rootPassword !== form.rootPasswordConfirm) errors.rootPasswordConfirm = 'Passwords do not match'
+    if (form.topology !== 'standalone') {
+      if (!form.replPassword) errors.replPassword = 'Replication password is required'
+      else if (form.replPassword !== form.replPasswordConfirm) errors.replPasswordConfirm = 'Passwords do not match'
+    }
+    if (form.initialDatabase.trim()) {
+      if (!form.initialUsername.trim()) errors.initialUsername = 'Username is required when creating an initial database'
+      if (!form.initialPassword) errors.initialPassword = 'Password is required'
+      else if (form.initialPassword !== form.initialPasswordConfirm) errors.initialPasswordConfirm = 'Passwords do not match'
+    }
+    if (form.metrics && form.metricsUsername.trim()) {
+      if (!form.metricsPassword) errors.metricsPassword = 'Password is required when a monitoring username is set'
+      else if (form.metricsPassword !== form.metricsPasswordConfirm) errors.metricsPasswordConfirm = 'Passwords do not match'
+    }
+    if (form.pmmEnabled) {
+      if (!form.pmmServerAddress.trim()) errors.pmmServerAddress = 'PMM Server address is required'
+      if (!form.pmmServerUsername.trim()) errors.pmmServerUsername = 'PMM Server username is required'
+      if (!form.pmmServerPassword) errors.pmmServerPassword = 'PMM Server password is required'
+      else if (form.pmmServerPassword !== form.pmmServerPasswordConfirm) errors.pmmServerPasswordConfirm = 'Passwords do not match'
+      if (!form.pmmDbUsername.trim()) errors.pmmDbUsername = 'Database monitoring username is required'
+      if (!form.pmmDbPassword) errors.pmmDbPassword = 'Database monitoring password is required'
+      else if (form.pmmDbPassword !== form.pmmDbPasswordConfirm) errors.pmmDbPasswordConfirm = 'Passwords do not match'
+    }
+  }
+  if (step === 4 && form.backupEnabled) {
+    if (form.backupPreset === 'custom' && !/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(form.backupCronCustom.trim()))
+      errors.backupCronCustom = 'Enter a valid 5-field cron expression (minute hour day month weekday)'
+    if (form.backupStorageType === 'S3') {
+      if (!form.backupS3Endpoint.trim()) errors.backupS3Endpoint = 'S3 endpoint is required'
+      if (!form.backupS3Bucket.trim()) errors.backupS3Bucket = 'Bucket is required'
+      if (!form.backupS3AccessKeyId) errors.backupS3AccessKeyId = 'Access key ID is required'
+      if (!form.backupS3SecretAccessKey) errors.backupS3SecretAccessKey = 'Secret access key is required'
+    }
   }
   return errors
 }
@@ -545,7 +890,17 @@ const defaultForm = {
   topology: 'replication', replicas: 3, autoFailover: true, semiSync: true,
   storage: '10Gi', storageClass: 'standard', serviceType: 'ClusterIP',
   resourcePreset: 'medium', cpuRequest: '1000m', cpuLimit: '2000m', memRequest: '1Gi', memLimit: '2Gi',
-  rootPassword: '', replPassword: '', tls: true, metrics: false,
+  rootPassword: '', rootPasswordConfirm: '', replPassword: '', replPasswordConfirm: '', tls: true, metrics: false,
+  initialDatabase: '', initialUsername: '', initialPassword: '', initialPasswordConfirm: '',
+  metricsUsername: '', metricsPassword: '', metricsPasswordConfirm: '',
+  pmmEnabled: false, pmmServerAddress: '', pmmServerUsername: 'admin',
+  pmmServerPassword: '', pmmServerPasswordConfirm: '', pmmInsecureTls: true,
+  pmmImage: 'percona/pmm-client:3',
+  pmmDbUsername: '', pmmDbPassword: '', pmmDbPasswordConfirm: '',
+  backupEnabled: false, backupPreset: '0 3 * * *', backupCronCustom: '', backupCompression: 'none',
+  backupStorageType: 'PersistentVolumeClaim', backupStorageSize: '1Gi',
+  backupS3Endpoint: '', backupS3Bucket: '', backupS3Region: '', backupS3Prefix: '',
+  backupS3AccessKeyId: '', backupS3SecretAccessKey: '', backupS3Tls: false,
 }
 
 export default function CreateMariaDB({ setPage }) {
@@ -585,9 +940,10 @@ export default function CreateMariaDB({ setPage }) {
 
   const stepComponents = [
     <StepBasics    form={form} update={update} errors={errors} />,
-    <StepTopology  form={form} update={update} />,
+    <StepTopology  form={form} update={update} errors={errors} />,
     <StepStorage   form={form} update={update} />,
     <StepSecurity  form={form} update={update} errors={errors} />,
+    <StepBackup    form={form} update={update} errors={errors} />,
     <StepReview    form={form} />,
   ]
 

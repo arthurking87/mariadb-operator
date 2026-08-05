@@ -4,8 +4,11 @@ import {
   Shield, Activity, AlertCircle, Loader2, CheckCircle2,
   XCircle, Zap, Network, Box, Copy, Check, Pencil, X, Cpu, ChevronDown,
 } from 'lucide-react'
+import * as Icons from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
+import ResourceTab from '../components/crd/ResourceTab'
+import { CRD_SCHEMAS, INSTANCE_CRD_TABS } from '../lib/crdSchemas'
 
 // ── tiny helpers ──────────────────────────────────────────────────────────────
 
@@ -462,6 +465,12 @@ const TABS = [
   { id: 'replication', label: 'Replication', icon: Activity },
   { id: 'services',    label: 'Services',    icon: Network },
   { id: 'tls',         label: 'TLS',         icon: Shield },
+  // Every CRD (Database/User/Grant/Backup/...) lives inside a single "CRDs" tab with its
+  // own secondary nav (see CrdsPanel below) instead of one top-level tab each — 9 extra
+  // top-level tabs made the bar unusably long / horizontal-scroll-only. Deliberately not
+  // called "Resources": the Overview tab already has a "Resources" card for CPU/memory
+  // requests-limits, and reusing the word for something unrelated was confusing.
+  { id: 'crds',        label: 'CRDs',         icon: Icons.Boxes },
   { id: 'events',      label: 'Events',      icon: Zap },
 ]
 
@@ -470,18 +479,51 @@ function TabBar({ active, setActive, type }) {
     t.id !== 'replication' || type === 'Replication' || type === 'Galera'
   )
   return (
-    <div className="flex items-center gap-1 border-b mb-6" style={{ borderColor: '#21262d' }}>
+    <div className="flex items-center gap-1 border-b mb-6 flex-wrap" style={{ borderColor: '#21262d' }}>
       {visible.map(t => {
         const on = active === t.id
         const Icon = t.icon
         return (
           <button key={t.id} onClick={() => setActive(t.id)}
-            className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px"
+            className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px flex-shrink-0"
             style={{ borderColor: on ? '#f97316' : 'transparent', color: on ? '#f97316' : '#8b949e' }}>
             <Icon size={13} />{t.label}
           </button>
         )
       })}
+    </div>
+  )
+}
+
+// ── CRDs panel (secondary nav for the 9 CRD tabs) ───────────────────────────────
+
+function CrdsPanel({ namespace, instanceName }) {
+  const [kind, setKind] = useState(INSTANCE_CRD_TABS[0])
+  const schema = CRD_SCHEMAS[kind]
+
+  return (
+    <div>
+      <div className="flex items-center flex-wrap gap-1.5 mb-5">
+        {INSTANCE_CRD_TABS.map(k => {
+          const s = CRD_SCHEMAS[k]
+          const Icon = Icons[s.icon] || Icons.Box
+          const on = kind === k
+          return (
+            <button
+              key={k} onClick={() => setKind(k)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
+              style={{
+                background: on ? 'rgba(249,115,22,0.12)' : 'transparent',
+                borderColor: on ? '#f97316' : '#30363d',
+                color: on ? '#f97316' : '#8b949e',
+              }}
+            >
+              <Icon size={13} />{s.pluralLabel}
+            </button>
+          )
+        })}
+      </div>
+      <ResourceTab schema={schema} namespace={namespace} instanceName={instanceName} />
     </div>
   )
 }
@@ -966,6 +1008,7 @@ export default function InstanceDetail({ instanceKey, setPage }) {
           {tab === 'replication' && <ReplicationTab detail={detail} />}
           {tab === 'services'    && <ServicesTab namespace={namespace} name={name} />}
           {tab === 'tls'         && <TLSTab tls={detail.tls} tlsEnabled={detail.tlsEnabled} />}
+          {tab === 'crds'        && <CrdsPanel namespace={namespace} instanceName={name} />}
           {tab === 'events'      && <EventsTab namespace={namespace} name={name} />}
         </>
       )}
