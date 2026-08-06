@@ -49,7 +49,7 @@ func (fakeDriver) Open(name string) (driver.Conn, error) {
 	return nil, errors.New("fakeDriver: Open not supported, use fakeConnector")
 }
 
-// fakeConnector always hands back the same *fakeConn, modelling the single dedicated
+// fakeConnector always hands back the same *fakeConn, modeling the single dedicated
 // connection that Client.LockTablesWithReadLock checks out of the pool for the lifetime of
 // the lock.
 type fakeConnector struct {
