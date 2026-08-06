@@ -35,6 +35,7 @@ export default function Settings() {
     setSettings({
       refreshInterval: Math.max(3, Number(form.refreshInterval) || DEFAULT_SETTINGS.refreshInterval),
       defaultNamespace: form.defaultNamespace.trim(),
+      latestMariadbVersion: form.latestMariadbVersion.trim() || DEFAULT_SETTINGS.latestMariadbVersion,
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -73,6 +74,17 @@ export default function Settings() {
             value={form.defaultNamespace}
             onChange={e => setForm(f => ({ ...f, defaultNamespace: e.target.value }))}
             className="w-64 px-3 py-2 rounded-lg text-sm border"
+            style={inputStyle}
+          />
+        </Field>
+
+        <Field label="Latest known MariaDB version" hint="Compared against each instance's image tag on its Overview page / Config Health check to flag ones that are behind. You keep this up to date yourself — nothing here queries a registry.">
+          <input
+            type="text"
+            placeholder="e.g. 11.8.5"
+            value={form.latestMariadbVersion}
+            onChange={e => setForm(f => ({ ...f, latestMariadbVersion: e.target.value }))}
+            className="w-32 px-3 py-2 rounded-lg text-sm border"
             style={inputStyle}
           />
         </Field>

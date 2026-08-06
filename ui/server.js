@@ -3,6 +3,7 @@ import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs'
+import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -102,6 +103,22 @@ function buildYAML(form) {
   }
   if (form.pmmEnabled) {
     const pmmImage = form.pmmImage?.trim() || 'percona/pmm-client:3'
+    // spec.sidecarContainers has no securityContext field, so the pmm-client sidecar
+    // always inherits the pod-level securityContext. The operator's default there
+    // (runAsUser/runAsGroup/fsGroup = mysql's uid, 999) doesn't match the uid the
+    // pmm-client:3 image's own files are owned by (pmm-agent, uid/gid 1002), so the
+    // agent fails with "mkdir .../tmp: permission denied" once it actually reaches a
+    // live PMM Server. Fix: push the pod-level uid/gid to pmm-agent's (1002) and pin
+    // the mariadb container back to 999 via its own container-level securityContext,
+    // which does exist on the main container and overrides the pod-level default.
+    lines.push(`  podSecurityContext:`)
+    lines.push(`    runAsNonRoot: true`)
+    lines.push(`    runAsUser: 1002`)
+    lines.push(`    runAsGroup: 1002`)
+    lines.push(`    fsGroup: 1002`)
+    lines.push(`  securityContext:`)
+    lines.push(`    runAsUser: 999`)
+    lines.push(`    runAsGroup: 999`)
     lines.push(`  volumes:`)
     lines.push(`    - name: pmm-client-storage`)
     lines.push(`      emptyDir: {}`)
@@ -450,6 +467,105 @@ app.get('/api/instances', async (req, res) => {
   }
 })
 
+// Global search: name-substring match across MariaDB instances and every CRD kind in the
+// registry, cluster-wide. One `kubectl get <kinds> -A` call (comma-separated resource
+// types is a single API round trip) rather than one call per kind. Each hit carries enough
+// to navigate straight to it: the owning instance (via spec.mariaDbRef.name, when the kind
+// has one) and which CRDs-tab sub-kind to preselect.
+app.get('/api/search', async (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase()
+  if (!q) return res.json({ results: [] })
+  try {
+    const kinds = ['mariadbs', ...Object.values(CRD_REGISTRY).map(e => e.plural)]
+    const { stdout } = await execFileAsync('kubectl', ['get', kinds.join(','), '-A', '-o', 'json'])
+    const items = JSON.parse(stdout).items ?? []
+    const kindToKey = Object.fromEntries(Object.entries(CRD_REGISTRY).map(([key, e]) => [e.kind, key]))
+
+    const results = items
+      .filter(i => i.metadata.name.toLowerCase().includes(q))
+      .map(i => {
+        const kind = i.kind
+        const isInstance = kind === 'MariaDB'
+        return {
+          kind,
+          name: i.metadata.name,
+          namespace: i.metadata.namespace,
+          instanceName: isInstance ? i.metadata.name : (i.spec?.mariaDbRef?.name ?? null),
+          crdKind: isInstance ? null : (kindToKey[kind] ?? null),
+        }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 40)
+
+    res.json({ results })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Aggregate CPU/memory/storage requests-limits across every MariaDB instance, grouped by
+// namespace. No metrics-server dependency (this cluster doesn't have one) — it's a
+// capacity-planning view of what's been *requested*, not live utilization.
+function parseCpu(v) {
+  if (!v) return 0
+  const s = String(v).trim()
+  return s.endsWith('m') ? parseFloat(s) / 1000 : parseFloat(s)
+}
+app.get('/api/capacity', async (req, res) => {
+  try {
+    const { stdout } = await execAsync(`kubectl get mariadb -A -o json`)
+    const items = JSON.parse(stdout).items
+    const byNamespace = {}
+    const totals = { cpuRequest: 0, cpuLimit: 0, memRequest: 0, memLimit: 0, storage: 0, instances: 0, replicas: 0 }
+
+    for (const item of items) {
+      const ns = item.metadata.namespace
+      const spec = item.spec
+      const replicas = item.status?.replicas ?? spec.replicas ?? 1
+      const cpuReq = parseCpu(spec.resources?.requests?.cpu) * replicas
+      const cpuLim = parseCpu(spec.resources?.limits?.cpu) * replicas
+      const memReq = (parseStorageBytes(spec.resources?.requests?.memory) ?? 0) * replicas
+      const memLim = (parseStorageBytes(spec.resources?.limits?.memory) ?? 0) * replicas
+      const storage = (parseStorageBytes(spec.storage?.size) ?? 0) * replicas
+
+      if (!byNamespace[ns]) byNamespace[ns] = { namespace: ns, cpuRequest: 0, cpuLimit: 0, memRequest: 0, memLimit: 0, storage: 0, instances: 0, replicas: 0 }
+      const bucket = byNamespace[ns]
+      bucket.cpuRequest += cpuReq; bucket.cpuLimit += cpuLim
+      bucket.memRequest += memReq; bucket.memLimit += memLim
+      bucket.storage += storage
+      bucket.instances += 1
+      bucket.replicas += replicas
+
+      totals.cpuRequest += cpuReq; totals.cpuLimit += cpuLim
+      totals.memRequest += memReq; totals.memLimit += memLim
+      totals.storage += storage
+      totals.instances += 1
+      totals.replicas += replicas
+    }
+
+    res.json({
+      totals,
+      namespaces: Object.values(byNamespace).sort((a, b) => b.cpuRequest - a.cpuRequest),
+      instances: items.map(item => {
+        const spec = item.spec
+        const replicas = item.status?.replicas ?? spec.replicas ?? 1
+        return {
+          name: item.metadata.name,
+          namespace: item.metadata.namespace,
+          replicas,
+          cpuRequest: spec.resources?.requests?.cpu ?? null,
+          cpuLimit: spec.resources?.limits?.cpu ?? null,
+          memRequest: spec.resources?.requests?.memory ?? null,
+          memLimit: spec.resources?.limits?.memory ?? null,
+          storage: spec.storage?.size ?? null,
+        }
+      }),
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // Deploy a new MariaDB instance
 app.post('/api/deploy', async (req, res) => {
   const form = req.body
@@ -596,6 +712,10 @@ app.get('/api/instances/:namespace/:name', async (req, res) => {
       tls: status.tls ?? null,
       tlsEnabled: spec.tls?.enabled ?? false,
       metricsEnabled: spec.metrics?.enabled ?? false,
+      pmmEnabled: (spec.sidecarContainers ?? []).some(c => c.name === 'pmm-client'),
+      pmmServerAddress: (spec.sidecarContainers ?? [])
+        .find(c => c.name === 'pmm-client')?.env
+        ?.find(e => e.name === 'PMM_AGENT_SERVER_ADDRESS')?.value ?? null,
       autoFailover: spec.replication?.primary?.autoFailover ?? false,
       semiSync: spec.replication?.semiSyncEnabled ?? false,
       resources: {
@@ -606,7 +726,11 @@ app.get('/api/instances/:namespace/:name', async (req, res) => {
       },
     })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    // The Resilience tab's restore-drill polls this route to check whether "<name>-drill"
+    // exists yet — that's a routine "not found" during normal use, not a server error, so
+    // surface it as 404 instead of a noisy 500.
+    const status = /notfound/i.test(err.message) ? 404 : 500
+    res.status(status).json({ error: err.message })
   }
 })
 
@@ -630,11 +754,16 @@ app.get('/api/instances/:namespace/:name/pods', async (req, res) => {
       const creationTime = new Date(p.metadata.creationTimestamp)
       const ageMin = Math.floor((Date.now() - creationTime.getTime()) / 60000)
       const age = ageMin < 60 ? `${ageMin}m` : ageMin < 1440 ? `${Math.floor(ageMin / 60)}h` : `${Math.floor(ageMin / 1440)}d`
+      // Galera has no per-pod status.replication.roles map (that's a Replication-only
+      // status field), so fall back to comparing against currentPrimary — good enough to
+      // tell "primary" from "member" for a Galera cluster even without real wsrep state.
+      const role = roles[p.metadata.name]
+        ?? (p.metadata.name === crStatus.currentPrimary ? 'Primary' : (crStatus.currentPrimary ? 'Member' : 'Unknown'))
 
       return {
         name: p.metadata.name,
         phase: p.status.phase,
-        role: roles[p.metadata.name] ?? 'Unknown',
+        role,
         ready: `${readyCount}/${containers.length}`,
         restarts,
         age,
@@ -647,6 +776,119 @@ app.get('/api/instances/:namespace/:name/pods', async (req, res) => {
       }
     })
     res.json({ pods: result })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Chaos-test hook for the Resilience tab: delete a single pod belonging to this
+// instance so the user can watch the operator's failover/self-healing happen live.
+// Scoped to `app.kubernetes.io/instance=<name>` pods only — the podName param can't be
+// used to delete anything outside this instance's own StatefulSet.
+app.post('/api/instances/:namespace/:name/chaos/delete-pod', async (req, res) => {
+  const { namespace, name } = req.params
+  const { podName } = req.body
+  if (!podName) return res.status(400).json({ error: 'podName is required' })
+  try {
+    const { stdout } = await execFileAsync('kubectl', [
+      'get', 'pods', '-n', namespace, '-l', `app.kubernetes.io/instance=${name}`, '-o', 'jsonpath={.items[*].metadata.name}',
+    ])
+    const validPods = stdout.trim().split(/\s+/).filter(Boolean)
+    if (!validPods.includes(podName)) {
+      return res.status(400).json({ error: `${podName} is not a pod of instance ${name}` })
+    }
+    await execFileAsync('kubectl', ['delete', 'pod', podName, '-n', namespace])
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Restore drill: spin up a throwaway MariaDB instance bootstrapped from an existing
+// Backup CR (spec.bootstrapFrom.backupRef), so a user can prove a backup is actually
+// restorable without touching the real instance. Drill instance is fixed-named
+// "<name>-drill" (one at a time per instance) and lives in the same namespace, since
+// bootstrapFrom.backupRef has no cross-namespace field. Teardown is a plain
+// DELETE /api/instances/:namespace/:drillName, reusing the existing generic route.
+app.post('/api/instances/:namespace/:name/restore-drill', async (req, res) => {
+  const { namespace, name } = req.params
+  const { backupName } = req.body
+  if (!backupName) return res.status(400).json({ error: 'backupName is required' })
+  const drillName = `${name}-drill`
+  try {
+    const { stdout: existing } = await execFileAsync('kubectl', [
+      'get', 'mariadb', drillName, '-n', namespace, '--ignore-not-found', '-o', 'name',
+    ])
+    if (existing.trim()) {
+      return res.status(409).json({ error: `A drill instance "${drillName}" already exists — delete it before starting a new drill.` })
+    }
+
+    // Reuse the SOURCE instance's own rootPasswordSecretKeyRef instead of generating a
+    // fresh one. A logical (mysqldump) backup restore brings back the source's real
+    // mysql.user table — including its root password hash — into the drill instance's
+    // database, so the operator's post-restore healthcheck must authenticate with that
+    // same password, not a newly generated one. Found by actually running a drill: the
+    // pod crash-looped on "Access denied for user 'root'@'localhost'" until this got fixed.
+    const { stdout: srcOut } = await execFileAsync('kubectl', ['get', 'mariadb', name, '-n', namespace, '-o', 'json'])
+    const srcRootRef = JSON.parse(srcOut).spec?.rootPasswordSecretKeyRef
+    if (!srcRootRef?.name || !srcRootRef?.key) {
+      return res.status(500).json({ error: `Could not resolve rootPasswordSecretKeyRef on source instance "${name}".` })
+    }
+
+    const yaml = [
+      `apiVersion: k8s.mariadb.com/v1alpha1`,
+      `kind: MariaDB`,
+      `metadata:`,
+      `  name: ${drillName}`,
+      `  namespace: ${namespace}`,
+      `  labels:`,
+      `    app.kubernetes.io/managed-by: mariadb-ui-drill`,
+      `    mariadb-ui/drill-source: ${name}`,
+      `spec:`,
+      `  rootPasswordSecretKeyRef:`,
+      `    name: ${srcRootRef.name}`,
+      `    key: ${srcRootRef.key}`,
+      `  image: "docker-registry1.mariadb.com/library/mariadb:11.8.5"`,
+      `  replicas: 1`,
+      `  storage:`,
+      `    size: 1Gi`,
+      `  service:`,
+      `    type: ClusterIP`,
+      `  primaryService:`,
+      `    type: ClusterIP`,
+      `  secondaryService:`,
+      `    type: ClusterIP`,
+      `  bootstrapFrom:`,
+      `    backupRef:`,
+      `      name: ${backupName}`,
+    ].join('\n') + '\n'
+
+    await new Promise((resolve, reject) => {
+      const child = exec(`kubectl apply -f -`, (err, stdout, stderr) =>
+        err ? reject(new Error(stderr || err.message)) : resolve(stdout))
+      child.stdin.write(yaml)
+      child.stdin.end()
+    })
+    res.json({ ok: true, drillName })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Tear down a restore drill: delete the MariaDB CR *and* its PVC. Unlike the generic
+// instance-delete route (which deliberately leaves PVCs behind — that's the right default
+// for a real instance, see the Dashboard delete modal), a drill instance is throwaway
+// scratch data with a fixed, reused name ("<name>-drill"). Found by hand: leaving the PVC
+// behind meant a second drill run silently reused the first run's already-restored volume
+// instead of actually re-restoring from whichever backup was picked the second time —
+// same symptom as a fresh restore, but the data underneath was stale.
+app.delete('/api/instances/:namespace/:name/restore-drill', async (req, res) => {
+  const { namespace, name } = req.params
+  const drillName = `${name}-drill`
+  try {
+    await execFileAsync('kubectl', ['delete', 'mariadb', drillName, '-n', namespace, '--ignore-not-found', '--wait=true', '--timeout=60s'])
+    await execFileAsync('kubectl', ['delete', 'pvc', '-n', namespace, '-l', `app.kubernetes.io/instance=${drillName}`, '--ignore-not-found'])
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -841,6 +1083,30 @@ app.patch('/api/instances/:namespace/:name/replicas', async (req, res) => {
     await execAsync(
       `kubectl patch mariadb ${name} -n ${namespace} --type=merge -p '${JSON.stringify({ spec: { replicas } })}'`
     )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Planned switchover: set spec.replication.primary.podIndex (or spec.galera.primary.podIndex
+// for Galera) to a different pod. This is the operator's own documented manual-switchover
+// mechanism (`kubectl explain mariadb.spec.replication.primary.podIndex` — "The user may
+// change this field to perform a manual switchover"), not a chaos delete-pod hack: the
+// operator runs a graceful multi-phase handover (read lock, read_only, wait for catch-up,
+// promote) and reports it via the PrimarySwitched condition.
+app.patch('/api/instances/:namespace/:name/switchover', async (req, res) => {
+  const { namespace, name } = req.params
+  const { podIndex } = req.body
+  if (podIndex === undefined || podIndex === null) return res.status(400).json({ error: 'podIndex is required' })
+  try {
+    const { stdout } = await execFileAsync('kubectl', ['get', 'mariadb', name, '-n', namespace, '-o', 'json'])
+    const spec = JSON.parse(stdout).spec
+    const field = spec.replication ? 'replication' : spec.galera ? 'galera' : null
+    if (!field) return res.status(400).json({ error: `"${name}" is Standalone — there is no primary to switch over` })
+
+    const patch = JSON.stringify({ spec: { [field]: { primary: { podIndex: Number(podIndex) } } } })
+    await execFileAsync('kubectl', ['patch', 'mariadb', name, '-n', namespace, '--type=merge', '-p', patch])
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })

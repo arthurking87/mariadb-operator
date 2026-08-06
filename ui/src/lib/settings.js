@@ -7,6 +7,7 @@ const STORAGE_KEY = 'mariadb-ui:settings'
 export const DEFAULT_SETTINGS = {
   refreshInterval: 10,   // seconds, used by useAutoRefresh on Dashboard/Activity
   defaultNamespace: '',  // pre-selected namespace filter on Dashboard
+  latestMariadbVersion: '11.8.5', // compared against each instance's image tag on the Overview/Health check
 }
 
 export function getSettings() {

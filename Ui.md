@@ -3,6 +3,140 @@
 > 產生日期：2026-08-05。記錄 `ui/` 這個 React + Express 小面板的現況、異動決策，以及尚未實作項目的規劃討論。
 > 面板結構：`ui/src/App.jsx`（路由）+ `ui/src/components/Sidebar.jsx`（左側導覽）+ `ui/src/pages/*.jsx`（各頁）+ `ui/server.js`（Express API，包在同一個容器內用 `kubectl`/`helm` 操作叢集）。
 
+## Switchover 頁面兩個修正：Refresh 按鈕被文字卡住、補上 10 秒自動刷新（2026-08-06）
+
+### 1. Header 的 Refresh 按鈕被說明文字擠到中間
+
+你回報「Switchover 這邊有個 Refresh 被文字卡住」。查了 `Switchover.jsx` 的 Header：`flex justify-between` 排列標題文字跟 Refresh 按鈕，但左側文字容器沒有 `min-w-0`/`flex-1`——flex item 預設 `min-width: auto`，意思是它不會縮小到低於內容自然寬度，而說明文字裡有 `<code>spec.replication.primary.podIndex</code>` 這種不可斷行的長字串，撐大了容器的最小寬度，換行時直接蓋到 Refresh 按鈕上。用無頭 Chrome 在 900px 寬度截圖重現：文字換行到第二行時「Refresh」三個字直接插進 `spec.galera.primary.podIndex` 後面的句子中間。
+
+**修法**：左側容器加 `min-w-0 flex-1 pr-6` 讓它能正確收縮換行，段落加 `break-words` 防極端情況溢出，容器對齊從 `items-center` 改成 `items-start`（配合按鈕 `mt-0.5`），讓文字變三行時按鈕仍穩定停在右上角，不會被擠到文字中間。
+
+**驗證**：無頭 Chrome 在 900px/1280px 兩種寬度分別截圖比對修正前後——修正前按鈕確實卡在段落中間，修正後三行文字正常換行、按鈕穩定停在右上角。
+
+### 2. 缺少跟其他頁面一致的每 10 秒自動刷新
+
+你問「Switchover 這邊有個 Refresh 怎沒有每 10 秒更新的動作了？」——查了才發現 `Switchover.jsx` 從建立以來就沒接過 `useAutoRefresh` 這個 hook，只有手動 Refresh 按鈕，Dashboard/Activity/Capacity 三個頁面都有的倒數環（`CountdownRing`）這裡完全沒做。
+
+**修法**：接上 `useAutoRefresh` + `CountdownRing`，Header 右上角改成跟其他頁一樣的樣式（倒數秒數 + 可暫停）。**關鍵細節**：不能像其他頁那樣單純整批 overwrite 資料——這頁有使用者正在操作的狀態（勾選框、下拉選的目標 pod、`pollRow` 正在輪詢中的 `switching` 狀態），如果每 10 秒直接整批換新資料，會把使用者剛勾好還沒按「Run」的選項清空、也會把正在進行中的 switchover 狀態閃回 `Idle`，跟輪詢邏輯打架。改成合併策略：新資料抓回來後用 `key` 比對舊 rows，非進行中的 row 才套用新資料，`switching` 中的 row 完全保留舊狀態，`selected`/`target` 兩個使用者輸入的欄位一律保留。
+
+**驗證**：無頭 Chrome 間隔幾秒各截一張圖，確認倒數環從 10s 正確倒數到 7s，資料照常載入且沒有把畫面清空重來。
+
+## 業界同類工具功能落差分析：Percona Everest / CloudNativePG / Vitess VTAdmin / phpMyAdmin・pgAdmin（2026-08-06）
+
+你問「還有沒有可以加到 UI 內的，幫我找找看業界」，第一輪先憑既有知識粗略列了幾個方向；你要求「再重新對照一次」，所以這輪改成實際查證每個工具目前真正提供的功能（WebSearch + WebFetch 官方文件），不是憑印象猜。同時比對這個 UI 現有頁面（Dashboard/Capacity/Switchover/Activity/InstanceDetail 的 pods/replication/services/tls/crds/events/resilience 分頁）跟 operator 已有但 UI 完全沒碰過的 CRD（`backup`、`restore`、`physicalbackup`、`pointintimerecovery`、`user`、`grant`、`sqljob`、`maxscale`）。
+
+### 逐一查證結果
+
+**Percona Everest**（定位最像——同樣是「操作 K8s DB CRD 的網頁 GUI」）：查了官方 [Features 頁](https://openeverest.io/documentation/1.12.0/features.html) 跟 [Restore backups](https://docs.percona.com/everest/backups_and_restore/RestoreBackup.html) 文件，確認有：Scheduled Backups 頁面（排程建立/檢視/刪除）、PITR 一鍵還原精靈、「用備份建立一個全新的 instance」（不只是還原回原本那個）、RBAC + IdP 群組整合 + SSO、PMM 監控整合入口。
+
+**CloudNativePG**：查了 [operator capability levels](https://cloudnative-pg.io/docs/1.25/operator_capability_levels/) 跟官方 [Grafana dashboards repo](https://github.com/cloudnative-pg/grafana-dashboards)，確認它**沒有**自建網頁管理台——走 `cnpg` kubectl plugin + 標準化 Grafana dashboard 這條路，監控完全外包給 Grafana。這點反而是這個 UI 現有的 Capacity/Activity 頁比 CNPG 生態做得更完整（他們沒有自己的網頁面板可比）。值得參考的是它「宣告式管理 Postgres 設定/extension」的概念。
+
+**Vitess VTAdmin**：查了 [VTAdmin 文件](https://vitess.io/docs/24.0/concepts/vtadmin/) 跟 [Schema Tracking](https://vitess.io/docs/15.0/reference/features/schema-tracking/)，確認除了 reparenting（對應這裡的 Switchover）之外，還有 Schema 頁：驗證 schema/version 跨節點一致性、重建 keyspace graph。這個 UI 的 `database` CRD 目前完全沒有對應的 schema 瀏覽器或一致性檢查。
+
+**phpMyAdmin / pgAdmin**：查了 [pgAdmin User Interface 文件](https://www.pgadmin.org/docs/pgadmin4/development/user_interface.html) 跟 [phpMyAdmin 功能說明](https://www.geeksforgeeks.org/php/basics-of-phpmyadmin/)，確認兩者核心賣點是：Query console + EXPLAIN 執行計畫、圖形化 User/Grant 權限管理、Schema/table 瀏覽器（欄位/索引/外鍵）、CSV/SQL 匯入匯出。這個 UI 有 `user`/`grant` CRD 但完全沒有對應頁面，只能透過泛用的 CrdsPanel 硬改 YAML。
+
+**額外查證**：Zalando [postgres-operator-ui](https://opensource.zalando.com/postgres-operator/docs/operator-ui.html)（另一個「輕量網頁面板包 K8s DB operator」的同類產品）確認有「用備份 clone 出一個新 cluster」跟送出前的 manifest 預覽面板；Percona PMM 的 [Query Analytics](https://docs.percona.com/percona-monitoring-and-management/3/discover-pmm/features.html) 文件確認 QAN dashboard 是靠 slow query log/performance schema 做「按 Load 排名找出最重的查詢 + EXPLAIN」，工程量遠大於這個 UI 其他頁面，且這個 UI 已經有 PMM sidecar 整合（見上面「整合 Percona PMM Monitoring」章節），重疊功能沒必要重做一套。
+
+### 結論：按「跟現有程式碼距離」排序的建議清單
+
+1. **PMM 深連結收尾**（工程量最小）——`InstanceDetail` Overview 已經顯示 PMM Server 位址跟 port-forward 指令（見上面「PMM 深連結」章節），但那是純文字，沒有更進一步的「一鍵打開」輔助（例如自動複製指令、或偵測 PMM Server 是否可從瀏覽器直接連到就給真連結）。
+2. **Backup/Restore 排程頁**（CRD 已齊全）——抄 Percona Everest 的 Scheduled Backups + 「用備份建立新 instance」，這個 UI 目前對 `backup`/`restore`/`physicalbackup`/`pointintimerecovery` 完全只有泛用 CrdsPanel，沒有專屬時間軸/日曆視圖。
+3. **User/Grant 管理頁**（CRD 已齊全）——抄 phpMyAdmin 的權限矩陣視圖，取代目前只能改 YAML 的 CrdsPanel。
+4. **Schema 一致性檢查**（小而美，抄 VTAdmin）——可以放進 Switchover 頁旁邊當個小工具，尤其對 Replication/Galera topology 有意義。
+5. Query console / EXPLAIN——工程量最大（要處理 SQL 執行、連線池、安全性），先不建議做，PMM 的 QAN 已經涵蓋這塊。
+
+目前還沒有動工，純粹是分析/規劃階段，記錄下來留給下一輪決定要不要做、做哪個。
+
+## 移除 Capacity 成本估算、新增 Switchover 頁面、精靈支援批次建立、PMM 深連結、版本落後提醒（2026-08-06）
+
+延續上一輪功能討論，這次做了 5 件事：
+
+### 1. 移除 Capacity 頁面的成本估算
+
+你的理由：硬體/雲端價格一直在變，這個估算沒有實際意義。拿掉了 `Capacity.jsx` 的「Estimated monthly cost」卡片、per-namespace 的 `~$X/mo` 顯示，以及 `Settings.jsx`/`src/lib/settings.js` 裡對應的三個費率欄位（`pricePerCpuCoreMonth`/`pricePerGbMemoryMonth`/`pricePerGbStorageMonth`）。Capacity 頁面回到只顯示「請求了多少資源」，不試圖換算成錢。
+
+### 2. Switchover 頁面（新側欄項目，支援批次）
+
+你問「這會建議多一個左側導覽欄位嗎？我會想有辦法一次設定多組要 switchover」——查證後確認 mariadb-operator 真的有官方支援的手動 switchover 機制：`spec.replication.primary.podIndex` / `spec.galera.primary.podIndex`（`kubectl explain` 的說明就寫「The user may change this field to perform a manual switchover」）。改這個欄位會觸發 operator 自己一套完整的 graceful 交接流程（lock primary with read lock → set read_only → 等 replica 追上 → promote，`pkg/controller/replication/switchover.go`），**不是**直接砍 primary pod 逼它失聯的 chaos 手法——這正是你要的「有計劃」而不是「意外測試」。
+
+批次操作天生就跨多個 instance，塞進單一 instance 的 Resilience 分頁不合理，所以做成獨立的側欄頁面（`Switchover.jsx`，`ArrowRightLeft` 圖示）：
+- 列出叢集裡所有 Replication/Galera instance（Standalone 沒有 primary 概念，不會出現），秀出目前 primary、一個選要切到哪個 replica 的下拉選單。
+- 每列可以勾選、也有單獨的「Switch」按鈕；上方「Run N switchovers」一次觸發所有勾選的（PATCH 呼叫依序送出，但送出後各自獨立 poll 進度，不互相卡住）。
+- 後端只加一支 `PATCH /api/instances/:namespace/:name/switchover`（body `{ podIndex }`），依 instance 是 Replication 還是 Galera 決定要 patch 哪個欄位；判斷是否完成看 `PrimarySwitched` 這個 condition 翻 True、且 `status.currentPrimary` 真的變成目標 pod。
+
+**驗證**：直接對 `test1/test-db-1`（3 replicas）打這支 API 兩次，實測 primary 從 `test-db-1-2` 切到 `test-db-1-1`——這個真實的 replication 叢集，`PrimarySwitched` condition 在切換過程中會先變 `False`（正在切）再變回 `True`（切完），跟前端 poll 邏輯（要求兩個條件同時成立）完全對得上，不是憑空猜的狀態機。
+
+### 3. New Instance 精靈支援一次建立多組（做了，之後又拿掉）
+
+你要求把「Clone Instance」延伸成「一次建立多組」，做法是 Basics 步驟加「Number of instances」欄位（1-10），數量 >1 時 Name 欄位變成「Name prefix」+ 即時預覽生成的名字，`deploy()` 依序呼叫既有的 `/api/deploy` N 次，`ResultModal` 加 `bulk` 模式逐一列出每個 instance 成功/失敗。實際看到畫面後你的回饋是「感覺不是我要的」，整個功能連同 `instanceCount` 欄位、`deployOne`/bulk 分支、`ResultModal` 的 bulk 顯示都已經還原掉——精靈回到只能一次建一個 instance。回想這次的教訓：這是這批功能裡唯一一個先做完整個功能才發現方向不對的,值得記一筆:「一次建立多組」這個需求本身可能更適合日後用「Clone Instance」單獨解決（複製單一 instance 的 spec 到精靈當預填值,一次還是只建一個),而不是在精靈裡加一個「數量」欄位去批次跑——後者做出來之後感覺更像是在單一表單裡硬塞一個迴圈,不是自然的操作流程。
+
+### 4. PMM 深連結
+
+Overview 分頁的 Features 卡片，PMM 有開的話會多一行「Percona PMM」，顯示 PMM Server 位址。**刻意沒有做成一個可以直接點的連結**——`PMM_AGENT_SERVER_ADDRESS` 是叢集內部的 DNS（例如 `monitoring-service.monitoring.svc.cluster.local:443`），瀏覽器本來就連不到，直接塞一個 `<a href>` 只會是一個點了沒反應/轉圈圈的假連結。改成偵測是不是符合 `<service>.<namespace>.svc.cluster.local` 這個 K8s 內部 DNS 格式，是的話直接生成、附上複製按鈕的 `kubectl port-forward -n <namespace> svc/<service> 8443:<port>` 指令，並提示「port-forward 完開 `https://localhost:8443` 搜尋這個 instance 的名字」——沒有假裝有一條直接可點的路，誠實反映「瀏覽器連不到叢集內部」這個限制。後端 `/api/instances/:namespace/:name` 順便多回傳一個 `pmmServerAddress` 欄位（從 `spec.sidecarContainers` 裡的 `PMM_AGENT_SERVER_ADDRESS` env 抓出來）。
+
+### 5. 版本落後提醒（可在 Settings 設定）
+
+你問「這邊看版本能否在 setting 設定」——Settings 頁新增「Latest known MariaDB version」文字欄位（預設 `11.8.5`，跟精靈的預設版本一致），**不接任何 registry API 去查真的最新版本**，純粹是你自己維護的一個目標值。Config Health 檢查清單多一項第 6 項「Up to date (target: x.x.x)」，拿 instance 目前的 image tag 版本號跟這個設定值做**數字逐段比較**（不是字串比較——字串比較會把 `"11.10.0"` 排在 `"11.8.5"` 前面，數字結果相反，所以特地寫了 `isVersionBehind()` 拆成 `.` 分段轉數字比對）。
+
+### 討論但先不做：簡易即時指標圖（#6）
+
+你想要的「簡易即時指標圖」在這個架構下有個實際限制：`ui/server.js` 是跑在你的host機器上用 `kubectl`/`helm` 操作叢集，不是跑在叢集裡面的 pod，沒辦法直接打 ClusterIP 連到 mysqld-exporter 的 `/metrics`，只能靠 `kubectl exec` 進某個 pod 裡下指令抓，這樣每次刷新大概要 1-2 秒，做不到真正意義上的「即時」。跟你確認過後，決定先不做，之後有需要再回來討論怎麼做（可能方向：輕量版每 5-10 秒 exec 抓幾個關鍵數字疊成折線圖；或者只在已經接 PMM 的 instance 上直接連去 PMM 自己存好的歷史數據，不用另外做一套抓取邏輯）。
+
+## 五個新功能：Resilience 分頁（Pod Failover Drill + Restore Drill）、Config Health、Topology 圖、Capacity 頁面（2026-08-06）
+
+你說「這 UI 還是很空」，丟了一個你自己的點子（delete pod 測 switchover）問還有什麼建議。討論後你選了全部 5 個一起做：
+
+1. **Pod Failover Drill**（Resilience 分頁）
+2. **Backup Restore Drill**（同一個 Resilience 分頁）
+3. **Config Health 檢查清單**（Overview 分頁最上方）
+4. **Replication/Galera Topology 視覺化圖**（Replication 分頁）
+5. **Capacity 頁面**（新側欄項目，跨 namespace 彙總資源用量）
+
+### 1. Pod Failover Drill
+
+Instance 詳情頁新增「Resilience」分頁（火焰圖示）。選一個 pod（預設選目前 primary）、點 Delete，跳出「打字輸入 pod 名稱才能確認」的 modal（跟 Dashboard 刪除 instance 用同一套防呆機制），送出後打 `POST /api/instances/:ns/:name/chaos/delete-pod`（後端會先核對這個 pod 名稱真的屬於這個 instance 的 StatefulSet，不接受任意 pod 名稱）。刪除後前端每 2 秒 poll 一次 pods/instance detail/events，即時把 phase 變化、primary 是否重新指派、相關 event 訊息疊成一個時間軸，直到 pod 恢復 Ready（且如果剛好刪的是 primary，還要等 primary 重新穩定）或 90 秒逾時。
+
+**驗證**：直接對 `pmm-verify`（standalone）打這個 API 刪掉 `pmm-verify-0`，實測 StatefulSet 在 36 秒內重建、變回 `2/2 Running`（新 pod，`creationTimestamp` 有更新，不是原地重啟）。畫面上用 headless Chrome 確認 modal 的「打字才能確認」防呆正常、Cancel 不會真的送出任何請求（`kubectl get pods` 核對過程中 pod 完全沒被動到）。
+
+### 2. Backup Restore Drill
+
+同一個 Resilience 分頁下方，列出這個 instance 的所有 Backup（複用既有的 `GET /api/crd/backup?namespace=&ref=&refField=mariaDbRef`），選一個、Run drill，會在**同一個 namespace**建一個名字固定叫 `<instance>-drill` 的全新 MariaDB instance，`spec.bootstrapFrom.backupRef` 指向選的那個 Backup（`bootstrapFrom` 沒有跨 namespace 欄位，所以只能同 namespace）。這是真的證明備份能不能用的唯一方法——不是檢查 Backup CR 的 Complete 狀態而已，是真的整套還原、跑起來、Ready 了才算數。
+
+**過程中抓到並修掉的 2 個真的 bug**（都是靠實測 `bootstrapFrom` 才發現，光看 YAML 生成邏輯完全看不出來）：
+
+1. **Root 密碼驗證失敗**：第一版幫 drill instance 隨機生一組全新的 root 密碼。實測後 drill pod 一直 `CrashLoopBackOff`，log 顯示 `Access denied for user 'root'@'localhost'`。查了 Backup 的邏輯備份（`pkg/command/backup.go:569` 預設 `--all-databases`，含 `mysql.global_priv`）+ 用 debug pod 掛上備份 PVC 直接讀 `.sql` 內容，確認 dump 裡真的含 root 的密碼 hash（用 Python 算 `SHA1(SHA1(password))` 比對過，字元完全吻合）。關鍵是：`bootstrapFrom` 還原出來的 pod 完全沒有跑 operator 平常「首次開機用 Secret 設定 root 密碼」那段初始化邏輯（log 直接從空白跳到 `ready for connections`，中間毫無 init 訊息）——datadir 是在這個 container 啟動前就已經被還原好的。也就是說**還原後 root 的實際密碼是備份當下來源 instance 的密碼，不是幫 drill instance 新產生的那組**。修法：拿掉隨機產生密碼那段，改成直接複用**來源 instance 自己的** `spec.rootPasswordSecretKeyRef`（同一個 namespace，同一把 Secret，不用另外建）。
+2. **重新 Run drill 會悄悄吃到上一次的舊資料**：修完密碼問題後，中途因為除錯需要反覆刪除重建 `<instance>-drill`，結果密碼問題明明修好了，卻還是連續失敗好幾次——後來才發現 `kubectl delete mariadb <name>-drill`（沿用既有的通用刪除 instance API）**不會刪掉 StatefulSet 的 PVC**（這是刻意的行為，保護真的 instance 的資料不會被誤刪，Dashboard 刪除 instance 的 modal 上就寫著這句話）。但對 drill instance 來說，這個「保護」反而是個坑：PVC 名字固定（`storage-<name>-drill-0`），第二次 Run drill 會沿用同一個 PVC，等於沒有真的重新還原,只是把「舊資料」誤判成「新的還原結果」。修法：新增一支專門給 drill 用的 `DELETE /api/instances/:namespace/:name/restore-drill`，刪 MariaDB CR 之後**額外用 label selector 把對應的 PVC 也刪掉**（`app.kubernetes.io/instance=<name>-drill`），跟通用的 instance 刪除 API 分開，因為兩者「該不該留 PVC」的正確答案本來就不一樣——真的 instance 要護資料，drill instance 本質是拋棄式的，留著 PVC 反而是風險，不是保護。前端 `RestoreDrill` 元件的 Cleanup 按鈕已經改打新的這支 API。
+
+**驗證**：`pmm-verify` 建一個真的 Backup（PVC 存儲），修好上面兩個 bug 之後跑 drill，`pmm-verify-drill` 在約 48 秒內變成 `Running`；`kubectl exec` 進去用來源密碼登入成功、`SHOW DATABASES` 看得到 `mysql`/`sys` 等完整 schema、`mysql.user` 表裡看得到從來源 instance 還原回來的 `pmm` 監控帳號——確認不只是「Ready 燈號變綠」,是真的還原了完整可用的資料庫。之後又完整測了一次「刪除 drill → 重新 Run drill」的循環，確認新的 PVC 清理邏輯生效、`storage-<name>-drill-0` 這個 PVC 真的被清掉,第二次還原是乾淨的。測試用的 Backup CR 跟 PVC 事後都清掉了,`test1` 留了一個乾淨的 `pmm-verify-backup-1`（Backup，PVC 存儲）當範例,可以直接在 UI 上試這個功能。
+
+### 3. Config Health 檢查清單
+
+Overview 分頁最上方新增一張卡片，5 項檢查：Resource requests/limits 有沒有設、TLS 有沒有開、有沒有排程備份（查有沒有任一個 Backup 的 `spec.schedule.cron` 有值）、是不是 HA topology（Replication/Galera 且 replicas>1）、有沒有接 monitoring（PMM 或 metrics 任一個）。每項通過/沒通過都有小圖示，沒通過的項目下面會有一行「為什麼在意這件事」的說明（不是只有紅叉，要讓人知道為什麼要修）。右上角一個「x/5」的分數徽章，全過是綠色、過一半以上黃色、不到一半紅色。
+
+### 4. Topology 視覺化圖
+
+Replication 分頁：原本只有純表格，現在最上面加一張圖——Primary 卡片在左邊（皇冠圖示），用 SVG 畫的箭頭指向右邊每個 Replica 卡片，箭頭顏色/實線虛線反映 IO/SQL thread 是否正常（綠色實線 = 正常、紅色虛線 = 有問題），旁邊列 lag 秒數。Galera 的話原本這個分頁會顯示「No replication data available」（因為 `status.replication` 這個欄位是 Replication 專屬,Galera 沒有），現在改成抓 pods API 畫一個環狀圖（用三角函數算每個 pod 在圓周上的座標），primary 用橘色標出來、其他 member 用一般顏色,並附註「Galera 沒有透過 MariaDB CR 的 status 暴露每個節點的即時 wsrep 狀態（cluster size/local state），這張圖只呈現目前拿得到的資訊——實體 pod 成員關係跟目前的 primary」,沒有假裝有更細的資料。
+
+`server.js` 的 `/pods` API 順便修正了一個小地方：pod 的 `role` 欄位原本只有 Replication 拿得到（來自 `status.replication.roles`）,Galera 會全部顯示 `Unknown`。改成 Galera 情況下 fallback 成「跟 `status.currentPrimary` 比對」來判斷 Primary/Member,這樣 Galera 環狀圖才有辦法正確標出哪個是 primary。
+
+### 5. Capacity 頁面
+
+新的側欄項目（Gauge 圖示）。後端 `GET /api/capacity`：抓全叢集所有 MariaDB instance 的 `spec.resources`/`spec.storage`,乘上 replica 數,依 namespace 分組加總。頁面上是 4 張總覽卡片（Instances/CPU/Memory/Storage,都是 requested,不是 limit,也不是即時用量）+ 每個 namespace 的長條圖（用容易讀的橫向 bar,不是花俏的圖表）+ 每個 instance 的明細表（點一列直接跳轉到那個 instance 的詳情頁）。
+
+**刻意不做的**：沒有接 `kubectl top nodes`（這個 KIND 叢集沒裝 metrics-server,`kubectl top nodes` 直接回 `error: Metrics API not available`）,所以頁面上方特別註明這是「你請求了多少」而不是「實際用了多少」,避免誤會成即時監控。真的要看即時使用率,還是要去 PMM。
+
+### 共同的驗證方式
+
+5 個功能全部先跑過 `npx vite build`（乾淨無錯誤,沒有殘留在 repo 裡,build 完就刪 `dist/`）,再丟一個 headless Chrome（Playwright）背景 agent 逐一點過畫面截圖確認、監聽 console error。Resilience 分頁的兩個 drill 因為都是真的會動到叢集的操作,agent 只驗證「modal 開得起來、Cancel 能乾淨關掉、沒有誤送出請求」,實際「按下確認鍵」的完整流程（刪 pod、真的建 drill instance）改成我自己直接對後端 API 手動測,原因就是上面寫的那兩個 bug——都是靠這樣正經跑一次真實流程才抓到的,只看 YAML/程式碼邏輯看不出來。
+
+## New Instance 精靈：Metrics 帳密固定為 `metrics`/`metrics`（2026-08-06）
+
+你要求把 Security 步驟裡 Metrics 開關打開後的監控帳密固定成 `metrics`/`metrics`，理由是這個帳號權限很小（operator 內建的 metrics grants，唯讀、不碰 schema），共用一組低權限密碼沒有實質風險。
+
+**做了什麼**：`ui/src/pages/CreateMariaDB.jsx` 的 Metrics 開關 `onChange` 改成同時把 `metricsUsername`/`metricsPassword`/`metricsPasswordConfirm` 這三個欄位固定寫成 `'metrics'`（關閉時清空回 `''`）；原本開啟後才出現的 Username/Password/Confirm Password 三個輸入框整個拿掉，改成一行說明文字：「Monitoring user credentials are fixed to `metrics` / `metrics`」+ 理由。`buildYAML`／送出建立用的邏輯完全沒動——本來就是讀 `form.metricsUsername`/`form.metricsPassword`，固定值一樣照原本路徑存進 `<name>-metrics-password` 這把 Secret 的機制走。
+
+**驗證**：用 headless Chrome（Playwright）實測整個開關切換——關閉時 Security 步驟只有 5 個輸入框（root/replication 密碼 + database name，沒有任何 Metrics 相關欄位）；打開後欄位數不變，只多出那行固定帳密的說明文字，沒有新的輸入框；關掉後說明文字消失，卡片收回。全程監聽 console error/pageerror，沒有任何 JS 錯誤（尤其是改成同時呼叫三次 `update()` 那個寫法，確認不會有 `setForm is not defined` 這類 ReferenceError——`StepSecurity` 這個 function component 本來就只吃 `form`/`update`/`errors` 三個 props，沒有 `setForm`，一開始寫成直接呼叫 `setForm(f => ...)` 會直接炸掉，改成呼叫三次 `update(key, val)` 才對）。
+
 ## New Instance 精靈：整合 Percona PMM Monitoring（2026-08-05）
 
 你問「知道 Percona Monitoring and Management 嗎？有辦法將裡面監控與這 UI 結合嗎？」
@@ -45,6 +179,69 @@ sidecarContainers:
 **驗證**：在 `test1` namespace 實際部署過兩次（一次用手刻 YAML 測 sidecar 修正過程、一次直接打 `/api/deploy`——跟 UI 走的是同一條路徑）。兩次都確認 `mariadb`、`pmm-client` 兩個 container 都進入穩定 `Running`（不是一次性 exit），`pmm-client` log 顯示設定檔讀取成功、正確從 Secret 解析出 `PMM_AGENT_SERVER_ADDRESS` 並嘗試對外註冊，最後卡在「`dial tcp: lookup pmm-server.monitoring.svc.cluster.local: no such host`」——這是預期的（叢集裡沒有真的 PMM Server，這只是驗證用的假地址），代表整條線路是通的，接上真的 PMM Server 位址就能運作。測試資源事後都清掉了。用 headless Chrome 走過精靈填表 + Review 步驟的 YAML 預覽，畫面跟生成的 YAML 都正常、無 console 錯誤。
 
 **已知限制**：PMM Client 的設定檔用 `emptyDir`（非持久化），Pod 重啟會遺失、需要重新註冊——`pmm-admin add mysql` 本身冪等，重新註冊不會出錯，只是每次重啟都會重跑一次。之後如果想做成真正持久化，需要另外在精靈裡加一個 PVC size 欄位（目前為了先把核心功能做完沒加，可以之後再補）。
+
+### PMM 使用方式（怎麼在 UI 上接一個 instance 到 PMM Server）
+
+**前提**：手上要有一個已經在跑、且這個 K8s 叢集能連得到的 PMM Server（這個功能不部署 PMM Server，只負責把 MariaDB instance 接上去）。
+
+1. **開 New Instance 精靈**，一路填到 **Security** 步驟，在 Metrics 卡片下方會看到「Percona PMM Monitoring」卡片，打開開關。
+2. 填 **PMM Server address**：`host:port` 格式，例如 `pmm-server.monitoring.svc.cluster.local:443`（同叢集內的 Service）或外部位址。
+3. 填 **PMM Server username/password**（+ Confirm password 二次確認）——這是登入 PMM Server 本身的帳密，不是資料庫帳密。會存進 `<instance名稱>-pmm-server` 這個 Secret。
+4. **Skip TLS verification**：PMM Server 常見自簽憑證，預設打開；如果 PMM Server 有正式憑證可以關掉。
+5. **PMM Client image**：預設 `percona/pmm-client:3`，要跟 PMM Server 的大版本對齊——PMM Server 是 v2 的話要手動改成 `percona/pmm-client:2`。
+6. 填 **Database monitoring user**（username/password + Confirm）——pmm-agent 會用這組帳密以 `127.0.0.1:3306` 本機連線去監控這個 MariaDB。**這組帳號 UI 不會自動建立**，必須自己先用同一個 instance 的 CRDs 分頁 → Users/Grants，建一個有 `SELECT, PROCESS, REPLICATION CLIENT, RELOAD` 權限的使用者（確切權限清單依 MariaDB 版本可能略有差異，可對照 Percona PMM 官方文件），帳密要跟這裡填的一致。密碼存進 `<instance名稱>-pmm-db` 這個 Secret。
+7. 走完 Review 步驟確認 YAML 預覽裡有 `pmm-client` sidecar 跟對應的 `emptyDir` volume，送出部署。
+8. 部署後可以 `kubectl get pods -n <namespace> <instance>-0` 確認 pod 裡有 `mariadb` 跟 `pmm-client` 兩個 container 都是 `Running`；`kubectl logs -n <namespace> <instance>-0 -c pmm-client` 可以看到 `pmm-admin add mysql` 的註冊結果——連線失敗多半是 PMM Server 位址錯、帳密錯，或監控用的資料庫使用者權限不夠/密碼跟這裡填的對不上。
+9. 註冊成功後，到 PMM Server 的 Web UI（不是這個 mariadb-operator UI）就能看到這個 instance 出現在 Inventory / Query Analytics 裡。
+
+**實際範例**——`test1/pmm-verify` 這個驗證用 instance，精靈欄位當時填的值：
+
+| 精靈欄位 | 填的值 |
+|---|---|
+| PMM Server address | `monitoring-service.monitoring.svc.cluster.local:443`（PMM Server 裝在 `monitoring` namespace，跨 namespace 要用 `<service>.<namespace>.svc.cluster.local` 這個完整格式，同 namespace 才能只寫 `<service>`） |
+| PMM Server username | `admin` |
+| PMM Server password | 裝 PMM Server（`helm install pmm ...`）當時設定的那組 admin 密碼 |
+| Skip TLS verification | 開（PMM Server 用自簽憑證） |
+| PMM Client image | `percona/pmm-client:3`（維持預設值，因為裝的 PMM Server 也是 v3） |
+| Database monitoring username | `pmm` |
+| Database monitoring password | 另外隨機產生一組，跟 PMM Server 密碼分開 |
+
+填完送出部署後，額外去 CRDs 分頁的 Users/Grants 幫 `pmm`（`host: 127.0.0.1`）這個帳號建了 `SELECT, PROCESS, REPLICATION CLIENT, RELOAD` 權限——這步精靈本身不會做，前面步驟 6 已經說明過。
+
+**要調整既有設定**（換 PMM Server 位址、換監控密碼等）：目前精靈只在「建立」流程有這張卡片，沒有做「已存在的 instance 事後修改 PMM 設定」的介面——要改的話得直接編輯該 instance 的 `spec.sidecarContainers`/`spec.volumes`（`kubectl edit mariadb <name>`）或改對應的 `-pmm-server`/`-pmm-db` Secret 後重啟 pod 讓新設定生效。
+
+### 對著真的 PMM Server 驗證後，抓到並修掉一個嚴重 bug：`pmm-client` 對真實 PMM Server 一律 permission denied（2026-08-06）
+
+先前那次驗證（上面「驗證」那段）叢集裡沒有真的 PMM Server，所以只確認到 `pmm-client` 能正確解析 Secret、嘗試對外連線，卡在 DNS 解析失敗就結束了——**沒有真的跑到 agent 啟動那一步**。這次先用 Percona 官方 Helm chart（`percona/pmm`）把一個真正的 PMM Server 部署到這個 KIND 叢集的 `monitoring` namespace 驗證，才發現這個功能上線以來其實一直是壞的：
+
+```
+level=info msg="Two-way communication channel to Agents Service established..." component=client
+level=error msg="Failed to start Agent: mkdir /usr/local/percona/pmm/tmp: permission denied." component=supervisor
+```
+
+跟 PMM Server 的連線本身是通的（gRPC channel 建立成功），但 agent 起不來，`node_exporter`/`mysqld_exporter`/QAN 全部無法啟動——等於**這個 sidecar 部署了但完全沒有在收集任何監控數據**，而且不會有任何看起來像失敗的訊號（container 是 `Running` 不是 `CrashLoopBackOff`），非常容易被忽略。
+
+**根因**：`kubectl explain mariadb.spec.sidecarContainers` 可以看到這個欄位背後是精簡過的 Container 型別，**沒有 `securityContext` 子欄位**——sidecar container 沒有辦法覆寫自己的 uid/gid，只能整個繼承 Pod 層級的 `securityContext`。而這個 operator 在使用者沒有自己填 `spec.podSecurityContext` 時（`pkg/builder/securitycontext_builder.go:61-66`），預設會把整個 Pod（含所有 sidecar）的 `runAsUser`/`runAsGroup`/`fsGroup` 全部釘死成 MariaDB 自己的 mysql uid（`999`）。用 `kubectl exec ... -- id` 進 `pmm-client` container 檢查，實際套用的是 `uid=999`，但 `percona/pmm-client:3` 這個 image 裡 `/usr/local/percona/pmm/` 整個目錄樹是照它自己內建的 `pmm-agent` 使用者（`uid=1002, gid=1002`）建置的（`ls -la` 顯示 owner 是 `pmm-agent:pmm-agent`）——999 既不是 owner 也不在 group 裡，只剩 other 權限（`r-x`，沒有 `w`），所以 agent 連自己要用的 `tmp` 子目錄都建不出來。
+
+**修法**：`spec.sidecarContainers` 雖然不能單獨設 uid，但 MariaDB CRD 另外有一組 `spec.podSecurityContext`（Pod 層級）跟 `spec.securityContext`（**只套用在 mariadb 主 container**，`pkg/builder/container_builder.go:355`，會覆寫 Pod 層級預設值）。所以做法是「反過來」：把 Pod 層級預設值改成 pmm-agent 要的 `1002`，再用只對 mariadb container 生效的 `securityContext` 把它重新釘回 `999`——sidecar 沒有自己的覆寫欄位，就吃到 Pod 層級的 `1002`，mariadb container 則因為有自己的覆寫而繼續用正確的 `999`：
+
+```yaml
+spec:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1002
+    runAsGroup: 1002
+    fsGroup: 1002
+  securityContext:
+    runAsUser: 999
+    runAsGroup: 999
+```
+
+`server.js` 的 `buildYAML`（實際送出用）跟 `CreateMariaDB.jsx` 的 client 端 `buildYAML`（Review 步驟的 YAML 預覽）都已經同步加上這段——只在 `form.pmmEnabled` 為真時附加，不影響沒開 PMM 的既有部署。
+
+**驗證**：先在既有的 `test1/pmm-verify` instance 上手動 `kubectl patch` 套用這組 securityContext，確認 `pmm-client` log 從 `permission denied` 變成三個 agent（`node_exporter`/`mysqld_exporter`/`qan_mysql_perfschema_agent`）全部 `AGENT_STATUS_RUNNING`；接著建立資料庫監控帳號（`User`/`Grant` CR，`pmm`@`127.0.0.1`，`SELECT, PROCESS, REPLICATION CLIENT, RELOAD`）後，用 PMM Server 的 `/v1/inventory/services` API 確認 `pmm-verify` 真的出現在 `mysql` 服務清單裡——不只是連線通,是整條「MariaDB → pmm-client → PMM Server → Inventory」的鏈路都跑通了。改完 `server.js`/`CreateMariaDB.jsx` 後，重啟 API server、**重新用修好的程式碼建一個全新的 `test1/pmm-verify2` instance**（沒有手動 patch 任何東西），確認兩個 container 直接 `Running`、`pmm-client` log 沒有再出現 `permission denied`，證明修的是精靈本身、不是我手動修好一個特例而已。驗證完 `pmm-verify2` 已刪除；`pmm-verify`（第一個、已在 PMM Server 上看得到數據）跟 `monitoring` namespace 的 PMM Server 都保留著，方便直接在 PMM Server UI（`kubectl port-forward -n monitoring svc/monitoring-service 8443:443`，帳密見上面「PMM 使用方式」段落）裡看實際數據。
+
+**已知殘留限制**：`1002` 這個 uid 是照 `percona/pmm-client:3` 這個 tag 實測出來的,如果手動把 PMM Client image 換成 `:2`（PMM Server 是 v2 的情況),沒有重新驗證過 `:2` 這個 image 內建的使用者 uid 是否也是 `1002`——理論上 Percona 兩個大版本的 image 使用者設計可能不同,換版本時如果又出現同樣的 `permission denied`,要重新用 `kubectl exec ... -- id` 對照 image 實際的 uid/gid 調整這兩段 securityContext。
 
 ## New Instance 精靈：Storage Class 改成動態抓叢集清單 + 可自由輸入（2026-08-05）
 

@@ -465,19 +465,15 @@ function StepSecurity({ form, update, errors }) {
             <div className="text-sm font-medium" style={{ color: '#e6edf3' }}>Metrics</div>
             <div className="text-xs mt-0.5" style={{ color: '#8b949e' }}>Export Prometheus metrics via mysqld-exporter</div>
           </div>
-          <Toggle checked={form.metrics} onChange={v => update('metrics', v)} />
+          <Toggle checked={form.metrics} onChange={v => {
+            update('metrics', v)
+            update('metricsUsername', v ? 'metrics' : '')
+            update('metricsPassword', v ? 'metrics' : '')
+            update('metricsPasswordConfirm', v ? 'metrics' : '')
+          }} />
         </div>
         {form.metrics && (
-          <>
-            <div className="text-xs" style={{ color: '#8b949e' }}>Monitoring user credentials — leave both blank to let the operator generate and manage them automatically.</div>
-            <Input label="Username (optional)" value={form.metricsUsername} onChange={e => update('metricsUsername', e.target.value)} placeholder="Auto-generated if blank" error={errors.metricsUsername} />
-            {form.metricsUsername.trim() && (
-              <div className="grid grid-cols-2 gap-4">
-                <PasswordInput label="Password" value={form.metricsPassword} onChange={v => update('metricsPassword', v)} error={errors.metricsPassword} />
-                <PasswordInput label="Confirm Password" value={form.metricsPasswordConfirm} onChange={v => update('metricsPasswordConfirm', v)} error={errors.metricsPasswordConfirm} />
-              </div>
-            )}
-          </>
+          <div className="text-xs" style={{ color: '#8b949e' }}>Monitoring user credentials are fixed to <code>metrics</code> / <code>metrics</code> — this account only gets the operator's built-in metrics grants (read-only, no schema access), so a shared low-value credential isn't a meaningful risk here.</div>
         )}
       </div>
 
@@ -679,6 +675,20 @@ function buildYAML(form) {
   if (form.pmmEnabled) {
     const nm = form.name || 'my-mariadb'
     lines.push(
+      // sidecarContainers has no securityContext field, so pmm-client always inherits
+      // the pod-level securityContext. The operator's default there (mysql's uid, 999)
+      // doesn't match the uid pmm-client:3's own files are owned by (pmm-agent, 1002),
+      // so the agent fails to write its tmp dir once it reaches a live PMM Server.
+      // Push the pod-level uid/gid to pmm-agent's and pin mariadb back to 999 via its
+      // own container-level securityContext (which overrides the pod-level default).
+      `  podSecurityContext:`,
+      `    runAsNonRoot: true`,
+      `    runAsUser: 1002`,
+      `    runAsGroup: 1002`,
+      `    fsGroup: 1002`,
+      `  securityContext:`,
+      `    runAsUser: 999`,
+      `    runAsGroup: 999`,
       `  volumes:`,
       `    - name: pmm-client-storage`,
       `      emptyDir: {}`,

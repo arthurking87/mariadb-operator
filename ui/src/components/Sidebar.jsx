@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Database, LayoutDashboard, Settings, Activity, BookOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Database, LayoutDashboard, Settings, Activity, BookOpen, Gauge, ArrowRightLeft, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 const nav = [
-  { id: 'dashboard', label: 'Instances', icon: LayoutDashboard },
-  { id: 'activity',  label: 'Activity', icon: Activity },
-  { id: 'docs',      label: 'Docs', icon: BookOpen },
-  { id: 'settings',  label: 'Settings', icon: Settings },
+  { id: 'dashboard',   label: 'Instances', icon: LayoutDashboard },
+  { id: 'switchover',  label: 'Switchover', icon: ArrowRightLeft },
+  { id: 'capacity',    label: 'Capacity', icon: Gauge },
+  { id: 'activity',    label: 'Activity', icon: Activity },
+  { id: 'docs',        label: 'Docs', icon: BookOpen },
+  { id: 'settings',    label: 'Settings', icon: Settings },
 ]
 
 export default function Sidebar({ page, setPage }) {

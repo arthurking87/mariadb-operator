@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ArrowLeft, RefreshCw, Database, Server, HardDrive, Clock,
   Shield, Activity, AlertCircle, Loader2, CheckCircle2,
@@ -9,6 +9,24 @@ import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
 import ResourceTab from '../components/crd/ResourceTab'
 import { CRD_SCHEMAS, INSTANCE_CRD_TABS } from '../lib/crdSchemas'
+import { getSettings } from '../lib/settings'
+
+// Compares dotted version strings numerically per segment (e.g. "11.8.5" < "11.10.0" —
+// a plain string compare would get that backwards). Returns true when `version` is
+// strictly behind `target`; malformed/non-numeric segments make it bail out to false
+// rather than risk a false "behind" flag.
+function isVersionBehind(version, target) {
+  if (!version || !target || version === '—') return false
+  const a = version.split('.').map(Number)
+  const b = target.split('.').map(Number)
+  if (a.some(Number.isNaN) || b.some(Number.isNaN)) return false
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] ?? 0, bv = b[i] ?? 0
+    if (av < bv) return true
+    if (av > bv) return false
+  }
+  return false
+}
 
 // ── tiny helpers ──────────────────────────────────────────────────────────────
 
@@ -64,6 +82,47 @@ function CopyButton({ text }) {
       style={{ color: copied ? '#3fb950' : '#8b949e', background: 'transparent' }}>
       {copied ? <Check size={11} /> : <Copy size={11} />}
     </button>
+  )
+}
+
+// PMM_AGENT_SERVER_ADDRESS is a cluster-internal address (a K8s Service DNS name or a raw
+// IP), not reachable from the browser this UI runs in — a plain <a href> to it would just
+// hang or fail to resolve. When it looks like the standard <svc>.<namespace>.svc.cluster.local
+// pattern, offer a copyable `kubectl port-forward` command instead of a broken "deep link".
+function PmmLink({ address, instanceName }) {
+  if (!address) {
+    return <span className="text-xs" style={{ color: '#8b949e' }}>PMM enabled, but no server address recorded on this instance.</span>
+  }
+  const [host, port] = address.split(':')
+  const parts = host.split('.')
+  const isClusterInternal = parts.length >= 5 && host.endsWith('.svc.cluster.local')
+  const svcName = isClusterInternal ? parts[0] : null
+  const svcNamespace = isClusterInternal ? parts[1] : null
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-sm" style={{ color: '#8b949e' }}>Percona PMM</span>
+        <span className="text-xs font-mono" style={{ color: '#e6edf3' }}>{address}</span>
+      </div>
+      {isClusterInternal ? (
+        <div className="flex items-center gap-2">
+          <code className="flex-1 text-xs px-2 py-1.5 rounded truncate" style={{ background: '#0d1117', color: '#8b949e', border: '1px solid #21262d' }}>
+            kubectl port-forward -n {svcNamespace} svc/{svcName} 8443:{port || 443}
+          </code>
+          <CopyButton text={`kubectl port-forward -n ${svcNamespace} svc/${svcName} 8443:${port || 443}`} />
+        </div>
+      ) : (
+        <a href={`https://${address}`} target="_blank" rel="noreferrer"
+          className="text-xs inline-flex items-center gap-1" style={{ color: '#58a6ff' }}>
+          Open PMM Server ↗
+        </a>
+      )}
+      <p className="text-xs mt-1.5" style={{ color: '#8b949e' }}>
+        Not directly reachable from your browser (cluster-internal address) — run the command above, then open{' '}
+        <span className="font-mono">https://localhost:8443</span> and search for "{instanceName}".
+      </p>
+    </div>
   )
 }
 
@@ -472,6 +531,7 @@ const TABS = [
   // requests-limits, and reusing the word for something unrelated was confusing.
   { id: 'crds',        label: 'CRDs',         icon: Icons.Boxes },
   { id: 'events',      label: 'Events',      icon: Zap },
+  { id: 'resilience',  label: 'Resilience',  icon: Icons.Flame },
 ]
 
 function TabBar({ active, setActive, type }) {
@@ -497,8 +557,8 @@ function TabBar({ active, setActive, type }) {
 
 // ── CRDs panel (secondary nav for the 9 CRD tabs) ───────────────────────────────
 
-function CrdsPanel({ namespace, instanceName }) {
-  const [kind, setKind] = useState(INSTANCE_CRD_TABS[0])
+function CrdsPanel({ namespace, instanceName, initialKind }) {
+  const [kind, setKind] = useState(INSTANCE_CRD_TABS.includes(initialKind) ? initialKind : INSTANCE_CRD_TABS[0])
   const schema = CRD_SCHEMAS[kind]
 
   return (
@@ -530,11 +590,90 @@ function CrdsPanel({ namespace, instanceName }) {
 
 // ── tab panels ────────────────────────────────────────────────────────────────
 
+function HealthChecklist({ detail, namespace, name }) {
+  const [hasScheduledBackup, setHasScheduledBackup] = useState(null) // null = loading
+
+  useEffect(() => {
+    fetch(`/api/crd/backup?namespace=${namespace}&ref=${name}&refField=mariaDbRef`)
+      .then(r => r.json())
+      .then(d => setHasScheduledBackup((d.items ?? []).some(b => b.spec?.schedule?.cron)))
+      .catch(() => setHasScheduledBackup(false))
+  }, [namespace, name])
+
+  const isHA = detail.type !== 'Standalone' && detail.replicas > 1
+  const targetVersion = getSettings().latestMariadbVersion
+  const behind = isVersionBehind(detail.version, targetVersion)
+  const checks = [
+    {
+      label: 'Resource requests/limits set', ok: !!(detail.resources?.cpuLimit && detail.resources?.memLimit),
+      why: 'Without limits, one noisy instance can starve others (or itself) on a shared node.',
+    },
+    {
+      label: 'TLS encryption enabled', ok: detail.tlsEnabled,
+      why: 'Client↔server traffic is in plaintext otherwise.',
+    },
+    {
+      label: 'Scheduled (recurring) backup', ok: hasScheduledBackup,
+      why: 'A one-off backup goes stale; only a cron schedule keeps you covered over time.',
+      loading: hasScheduledBackup === null,
+    },
+    {
+      label: 'High availability topology', ok: isHA,
+      why: isHA ? null : 'Standalone / single-replica — a lost pod means downtime until it reschedules, with no automatic failover.',
+    },
+    {
+      label: 'Monitoring connected (PMM or metrics)', ok: detail.pmmEnabled || detail.metricsEnabled,
+      why: 'No visibility into query performance or resource pressure until something is already broken.',
+    },
+    {
+      label: `Up to date (target: ${targetVersion})`, ok: !behind,
+      why: `Running ${detail.version}, behind the version you set in Settings — missing whatever fixes landed since.`,
+    },
+  ]
+  const loaded = checks.filter(c => !c.loading)
+  const passed = loaded.filter(c => c.ok).length
+  const scoreColor = passed === loaded.length ? '#3fb950' : passed >= loaded.length / 2 ? '#d29922' : '#f85149'
+
+  return (
+    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Icons.HeartPulse size={15} color={scoreColor} />
+          <h2 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>Config Health</h2>
+        </div>
+        <span className="text-xs font-mono px-2 py-0.5 rounded-full font-semibold" style={{ background: scoreColor + '22', color: scoreColor }}>
+          {passed}/{loaded.length}
+        </span>
+      </div>
+      <div className="space-y-2">
+        {checks.map(c => (
+          <div key={c.label} className="flex items-start justify-between py-1.5 border-b last:border-0" style={{ borderColor: '#21262d' }}>
+            <div>
+              <div className="flex items-center gap-2">
+                {c.loading
+                  ? <Loader2 size={13} className="animate-spin" color="#8b949e" />
+                  : c.ok ? <CheckCircle2 size={13} color="#3fb950" /> : <XCircle size={13} color="#d29922" />}
+                <span className="text-sm" style={{ color: '#e6edf3' }}>{c.label}</span>
+              </div>
+              {!c.loading && !c.ok && c.why && (
+                <p className="text-xs mt-1 ml-5" style={{ color: '#8b949e' }}>{c.why}</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function OverviewTab({ detail, namespace, name, onRefresh }) {
   const conditionColor = s => s === 'True' ? '#3fb950' : '#f85149'
 
   return (
     <div className="space-y-6">
+      {/* Config health checklist */}
+      <HealthChecklist detail={detail} namespace={namespace} name={name} />
+
       {/* Meta cards */}
       <div className="grid grid-cols-3 gap-3">
 
@@ -575,6 +714,11 @@ function OverviewTab({ detail, namespace, name, onRefresh }) {
               <Pill ok={f.ok} label={f.ok ? 'Enabled' : 'Disabled'} />
             </div>
           ))}
+          {detail.pmmEnabled && (
+            <div className="col-span-2 py-2 border-t" style={{ borderColor: '#21262d' }}>
+              <PmmLink address={detail.pmmServerAddress} instanceName={name} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -659,7 +803,109 @@ function PodsTab({ namespace, name, primary }) {
   )
 }
 
-function ReplicationTab({ detail }) {
+function ReplicationTopologyDiagram({ detail }) {
+  const roles    = detail.replication?.roles ?? {}
+  const replicas = detail.replication?.replicas ?? {}
+  const primaryPod  = Object.entries(roles).find(([, r]) => r === 'Primary')?.[0]
+  const replicaPods = Object.entries(roles).filter(([, r]) => r !== 'Primary').map(([pod]) => pod)
+
+  if (!primaryPod) return null
+
+  return (
+    <div className="rounded-xl border p-5" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <div className="flex items-center gap-6">
+        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+          <div className="w-24 h-16 rounded-xl border-2 flex flex-col items-center justify-center" style={{ borderColor: '#f97316', background: 'rgba(249,115,22,0.1)' }}>
+            <Icons.Crown size={16} color="#f97316" />
+            <span className="text-[10px] font-mono mt-1 truncate max-w-[88px]" style={{ color: '#e6edf3' }}>{primaryPod}</span>
+          </div>
+          <span className="text-[10px] font-medium" style={{ color: '#f97316' }}>PRIMARY</span>
+        </div>
+
+        <div className="flex-1 flex flex-col gap-3">
+          {replicaPods.length === 0 && <span className="text-xs" style={{ color: '#8b949e' }}>No replicas.</span>}
+          {replicaPods.map(pod => {
+            const r = replicas[pod]
+            const healthy = r?.slaveIORunning && r?.slaveSQLRunning
+            const lag = r?.secondsBehindMaster
+            return (
+              <div key={pod} className="flex items-center gap-3">
+                <svg width="40" height="24" style={{ flexShrink: 0 }}>
+                  <line x1="0" y1="12" x2="34" y2="12" stroke={healthy ? '#3fb950' : '#f85149'} strokeWidth="2" strokeDasharray={healthy ? '' : '3,3'} />
+                  <polygon points="34,7 40,12 34,17" fill={healthy ? '#3fb950' : '#f85149'} />
+                </svg>
+                <div className="flex-1 flex items-center justify-between rounded-lg border px-3 py-2" style={{ borderColor: '#30363d', background: '#0d1117' }}>
+                  <span className="text-xs font-mono" style={{ color: '#e6edf3' }}>{pod}</span>
+                  <div className="flex items-center gap-3">
+                    <Pill ok={r?.slaveIORunning} label="IO" />
+                    <Pill ok={r?.slaveSQLRunning} label="SQL" />
+                    <span className="text-xs font-mono" style={{ color: lag > 0 ? '#d29922' : '#3fb950' }}>{lag ?? '—'}s lag</span>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function GaleraTopologyDiagram({ namespace, name, detail }) {
+  const [pods, setPods] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`/api/instances/${namespace}/${name}/pods`)
+      .then(r => r.json())
+      .then(d => setPods(d.pods ?? []))
+      .finally(() => setLoading(false))
+  }, [namespace, name])
+
+  if (loading) return <Spinner />
+  if (!pods.length) return <p className="text-sm" style={{ color: '#8b949e' }}>No pods found.</p>
+
+  const size = 260, center = size / 2, radius = 95, nodeW = 96, nodeH = 40
+  const positions = pods.map((p, i) => {
+    const angle = (2 * Math.PI * i) / pods.length - Math.PI / 2
+    return { pod: p, x: center + radius * Math.cos(angle) - nodeW / 2, y: center + radius * Math.sin(angle) - nodeH / 2 }
+  })
+
+  return (
+    <div className="rounded-xl border p-5" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <p className="text-xs mb-4" style={{ color: '#8b949e' }}>
+        Physical cluster membership from the Pods API — Galera doesn't expose per-node wsrep state (cluster size, local state) through
+        the MariaDB CR's status, only which pod is currently the write-primary.
+      </p>
+      <div className="relative mx-auto" style={{ width: size, height: size }}>
+        <div className="absolute rounded-full border" style={{ inset: (size - 2 * radius - nodeH) / 2, borderColor: '#30363d', borderStyle: 'dashed' }} />
+        {positions.map(({ pod, x, y }) => {
+          const isPrimary = pod.name === detail.primary
+          const healthy = pod.phase === 'Running'
+          return (
+            <div key={pod.name} className="absolute flex flex-col items-center justify-center rounded-xl border-2 px-2"
+              style={{
+                left: x, top: y, width: nodeW, height: nodeH,
+                borderColor: isPrimary ? '#f97316' : healthy ? '#30363d' : '#f85149',
+                background: isPrimary ? 'rgba(249,115,22,0.1)' : '#0d1117',
+              }}>
+              <span className="text-[10px] font-mono truncate max-w-full" style={{ color: '#e6edf3' }}>{pod.name}</span>
+              <span className="text-[9px]" style={{ color: isPrimary ? '#f97316' : healthy ? '#3fb950' : '#f85149' }}>
+                {isPrimary ? 'PRIMARY' : healthy ? 'member' : pod.phase}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReplicationTab({ namespace, name, detail }) {
+  if (detail.type === 'Galera') {
+    return <GaleraTopologyDiagram namespace={namespace} name={name} detail={detail} />
+  }
+
   const replicas = detail.replication?.replicas ?? {}
   const roles    = detail.replication?.roles ?? {}
 
@@ -671,6 +917,8 @@ function ReplicationTab({ detail }) {
 
   return (
     <div className="space-y-4">
+      <ReplicationTopologyDiagram detail={detail} />
+
       {/* Role summary */}
       <div className="flex gap-3">
         {pods.map(([pod, role]) => (
@@ -904,14 +1152,399 @@ function EventsTab({ namespace, name }) {
   )
 }
 
+// ── resilience tab: chaos pod-delete drill + backup restore drill ──────────────
+
+function ConfirmModal({ title, description, confirmWord, actionLabel, danger = true, busy, error, onCancel, onConfirm }) {
+  const [typed, setTyped] = useState('')
+  const confirmed = typed === confirmWord
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: 'rgba(0,0,0,0.75)' }}>
+      <div className="rounded-2xl border p-6 w-full max-w-md mx-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: danger ? 'rgba(248,81,73,0.15)' : 'rgba(249,115,22,0.15)' }}>
+            <Icons.AlertTriangle size={20} color={danger ? '#f85149' : '#f97316'} />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>{title}</h3>
+            <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{description}</p>
+          </div>
+        </div>
+        <div className="mb-5">
+          <label className="text-xs mb-1.5 block" style={{ color: '#8b949e' }}>
+            Type <span style={{ color: '#e6edf3', fontWeight: 600 }}>{confirmWord}</span> to confirm
+          </label>
+          <input value={typed} onChange={e => setTyped(e.target.value)} placeholder={confirmWord} autoFocus
+            className="w-full px-3 py-2 rounded-lg text-sm border outline-none transition-colors"
+            style={{ background: '#0d1117', borderColor: confirmed ? (danger ? '#f85149' : '#f97316') : '#30363d', color: '#e6edf3' }}
+            onKeyDown={e => e.key === 'Enter' && confirmed && !busy && onConfirm()} />
+        </div>
+        {error && (
+          <div className="flex items-center gap-2 p-2.5 rounded-lg mb-4 text-xs" style={{ background: 'rgba(248,81,73,0.1)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
+            <AlertCircle size={13} />{error}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button onClick={onCancel} disabled={busy} className="flex-1 py-2 rounded-lg text-sm border" style={{ background: 'transparent', borderColor: '#30363d', color: '#8b949e' }}>
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={!confirmed || busy}
+            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all"
+            style={{
+              background: confirmed && !busy ? (danger ? 'rgba(248,81,73,0.9)' : 'rgba(249,115,22,0.9)') : '#21262d',
+              color: confirmed && !busy ? 'white' : '#8b949e',
+              cursor: confirmed && !busy ? 'pointer' : 'not-allowed',
+            }}>
+            {busy ? <><Loader2 size={13} className="animate-spin" />Working…</> : <>{actionLabel}</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LogLine({ entry }) {
+  const color = entry.kind === 'done' ? '#3fb950' : entry.kind === 'action' ? '#f97316' : '#8b949e'
+  return (
+    <div className="flex items-start gap-2 py-1 text-xs">
+      <span className="font-mono flex-shrink-0" style={{ color: '#484f58' }}>{entry.t.toLocaleTimeString()}</span>
+      <span style={{ color }}>{entry.msg}</span>
+    </div>
+  )
+}
+
+function PodFailoverDrill({ namespace, name, detail, onRefreshDetail }) {
+  const [pods, setPods] = useState([])
+  const [selectedPod, setSelectedPod] = useState(null)
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState(null)
+  const [log, setLog] = useState([])
+  const [startedAt, setStartedAt] = useState(null)
+  const pollRef = useRef(null)
+  const lastPhaseRef = useRef(null)
+  const lastPrimaryRef = useRef(null)
+  const lastEventTimeRef = useRef(null)
+  const ticksRef = useRef(0)
+
+  const fetchPods = useCallback(() => {
+    return fetch(`/api/instances/${namespace}/${name}/pods`).then(r => r.json())
+      .then(d => { if (!d.error) setPods(d.pods); return d.pods ?? [] })
+      .catch(() => [])
+  }, [namespace, name])
+
+  useEffect(() => {
+    fetchPods().then(p => {
+      if (p.length && !selectedPod) setSelectedPod(p.some(x => x.name === detail.primary) ? detail.primary : p[0].name)
+    })
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchPods])
+
+  const append = (msg, kind = 'info') => setLog(l => [...l, { t: new Date(), msg, kind }])
+
+  const startDrill = async () => {
+    const deletedPod = selectedPod
+    const wasPrimary = deletedPod === detail.primary
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${name}/chaos/delete-pod`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ podName: deletedPod }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+
+      setConfirming(false); setRunning(true)
+      setStartedAt(Date.now())
+      lastPhaseRef.current = null; lastPrimaryRef.current = detail.primary; lastEventTimeRef.current = new Date().toISOString(); ticksRef.current = 0
+      setLog([{ t: new Date(), msg: `Deleted pod ${deletedPod}${wasPrimary ? ' — this was the primary' : ''}. Watching recovery…`, kind: 'action' }])
+
+      pollRef.current = setInterval(async () => {
+        ticksRef.current += 1
+        try {
+          const [podsD, detD, evD] = await Promise.all([
+            fetch(`/api/instances/${namespace}/${name}/pods`).then(r => r.json()),
+            fetch(`/api/instances/${namespace}/${name}`).then(r => r.json()),
+            fetch(`/api/instances/${namespace}/${name}/events`).then(r => r.json()),
+          ])
+          setPods(podsD.pods ?? [])
+          const target = (podsD.pods ?? []).find(p => p.name === deletedPod)
+          if (target && target.phase !== lastPhaseRef.current) {
+            append(`${deletedPod} → phase ${target.phase} (${target.ready} ready, ${target.restarts} restarts)`)
+            lastPhaseRef.current = target.phase
+          }
+          if (detD.primary && detD.primary !== lastPrimaryRef.current) {
+            append(`Primary changed: ${lastPrimaryRef.current} → ${detD.primary}`)
+            lastPrimaryRef.current = detD.primary
+          }
+          for (const ev of (evD.events ?? [])) {
+            if (ev.lastTime && ev.lastTime > lastEventTimeRef.current) {
+              append(`Event (${ev.type}/${ev.reason}): ${ev.message}`)
+            }
+          }
+          if (evD.events?.length) {
+            const newest = evD.events.reduce((a, b) => (a.lastTime > b.lastTime ? a : b))
+            if (newest.lastTime) lastEventTimeRef.current = newest.lastTime
+          }
+
+          const targetReady = target && target.phase === 'Running' && target.ready.split('/')[0] === target.ready.split('/')[1]
+          const primarySettled = !wasPrimary || (detD.primary && detD.status === 'Running')
+          const timedOut = ticksRef.current > 45 // ~90s at 2s/tick
+
+          if ((targetReady && primarySettled) || timedOut) {
+            clearInterval(pollRef.current); pollRef.current = null
+            setRunning(false)
+            append(
+              timedOut ? 'Stopped watching after 90s — instance may still be recovering, check the Pods/Events tabs.'
+                       : `Recovery complete in ${Math.round((Date.now() - startedAt) / 1000)}s.`,
+              timedOut ? 'info' : 'done'
+            )
+            onRefreshDetail()
+          }
+        } catch { /* transient fetch error mid-recovery — keep polling */ }
+      }, 2000)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <SectionHeader icon={Icons.Flame} title="Pod Failover Drill" accent="#f97316" />
+      <p className="text-xs mb-4" style={{ color: '#8b949e' }}>
+        Delete a pod on purpose and watch {detail.type === 'Standalone' ? 'the StatefulSet recreate it' : 'the operator fail over / recover'} in real time.
+        {detail.type === 'Standalone' && ' This instance is Standalone, so there is no primary to reassign — this only proves the pod comes back on its own.'}
+      </p>
+
+      {!running && (
+        <>
+          <div className="flex items-center flex-wrap gap-2 mb-4">
+            {pods.map(p => (
+              <button key={p.name} onClick={() => setSelectedPod(p.name)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono border transition-all"
+                style={{
+                  background: selectedPod === p.name ? 'rgba(249,115,22,0.12)' : 'transparent',
+                  borderColor: selectedPod === p.name ? '#f97316' : '#30363d',
+                  color: selectedPod === p.name ? '#f97316' : '#8b949e',
+                }}>
+                {p.name}{p.name === detail.primary && <span className="text-[10px] opacity-80">(primary)</span>}
+              </button>
+            ))}
+            {!pods.length && <span className="text-xs" style={{ color: '#8b949e' }}>Loading pods…</span>}
+          </div>
+          <button onClick={() => setConfirming(true)} disabled={!selectedPod}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+            style={{ background: 'rgba(248,81,73,0.12)', color: '#f85149', border: '1px solid rgba(248,81,73,0.35)' }}>
+            <Icons.Skull size={14} />Delete {selectedPod || 'pod'}
+          </button>
+        </>
+      )}
+
+      {(running || log.length > 0) && (
+        <div className="rounded-lg border p-3 mt-2" style={{ background: '#0d1117', borderColor: '#21262d', maxHeight: 260, overflowY: 'auto' }}>
+          {log.map((entry, i) => <LogLine key={i} entry={entry} />)}
+          {running && (
+            <div className="flex items-center gap-2 pt-1" style={{ color: '#8b949e' }}>
+              <Loader2 size={12} className="animate-spin" /><span className="text-xs">Watching…</span>
+            </div>
+          )}
+        </div>
+      )}
+      {!running && log.length > 0 && (
+        <button onClick={() => { setLog([]); fetchPods() }} className="text-xs mt-3" style={{ color: '#58a6ff', background: 'none', border: 'none', cursor: 'pointer' }}>
+          Run another drill
+        </button>
+      )}
+
+      {confirming && (
+        <ConfirmModal
+          title="Delete this pod?"
+          description={`This will run "kubectl delete pod ${selectedPod}" against the live instance. It should recover on its own — that's the point of the drill — but treat it like the production disruption it actually is.`}
+          confirmWord={selectedPod}
+          actionLabel={<><Icons.Skull size={13} />Delete pod</>}
+          busy={busy}
+          error={error}
+          onCancel={() => { setConfirming(false); setError(null) }}
+          onConfirm={startDrill}
+        />
+      )}
+    </div>
+  )
+}
+
+function RestoreDrill({ namespace, name }) {
+  const drillName = `${name}-drill`
+  const [backups, setBackups] = useState([])
+  const [selectedBackup, setSelectedBackup] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [drill, setDrill] = useState(null) // null=none, 'loading', or detail object
+  const pollRef = useRef(null)
+
+  useEffect(() => {
+    fetch(`/api/crd/backup?namespace=${namespace}&ref=${name}&refField=mariaDbRef`)
+      .then(r => r.json())
+      .then(d => setBackups(d.items ?? []))
+      .catch(() => {})
+  }, [namespace, name])
+
+  const checkDrill = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${drillName}`)
+      if (!res.ok) { setDrill(null); return null }
+      const d = await res.json()
+      setDrill(d)
+      return d
+    } catch { setDrill(null); return null }
+  }, [namespace, drillName])
+
+  useEffect(() => {
+    checkDrill()
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [checkDrill])
+
+  const startDrill = async () => {
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${name}/restore-drill`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ backupName: selectedBackup }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setConfirming(false)
+      setDrill('loading')
+      pollRef.current = setInterval(async () => {
+        const d2 = await checkDrill()
+        if (d2 && (d2.status === 'Running' || (d2.statusMessage || '').length)) {
+          // keep polling until Running or until it's been failing for a while — the modal
+          // has no server-side timeout, so this is a soft "poll forever while the tab is open"
+        }
+        if (d2 && d2.status === 'Running') { clearInterval(pollRef.current); pollRef.current = null }
+      }, 3000)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const cleanup = async () => {
+    setBusy(true)
+    try {
+      await fetch(`/api/instances/${namespace}/${name}/restore-drill`, { method: 'DELETE' })
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+      setDrill(null)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <SectionHeader icon={Icons.ShieldCheck} title="Backup Restore Drill" accent="#58a6ff" />
+      <p className="text-xs mb-4" style={{ color: '#8b949e' }}>
+        Prove a backup is actually restorable: spins up a throwaway instance (<code>{drillName}</code>) bootstrapped from it,
+        in this same namespace. Nothing about your real instance is touched. Delete the drill instance when you're done looking at it.
+      </p>
+
+      {!drill && (
+        <>
+          {backups.length === 0 ? (
+            <p className="text-xs" style={{ color: '#8b949e' }}>No Backup resources found for this instance yet — create one in the CRDs tab first.</p>
+          ) : (
+            <>
+              <div className="flex items-center flex-wrap gap-2 mb-4">
+                {backups.map(b => {
+                  const complete = b.status?.conditions?.some(c => c.type === 'Complete' && c.status === 'True')
+                  return (
+                    <button key={b.name} onClick={() => setSelectedBackup(b.name)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono border transition-all"
+                      style={{
+                        background: selectedBackup === b.name ? 'rgba(88,166,255,0.12)' : 'transparent',
+                        borderColor: selectedBackup === b.name ? '#58a6ff' : '#30363d',
+                        color: selectedBackup === b.name ? '#58a6ff' : '#8b949e',
+                      }}>
+                      {b.name}
+                      {complete ? <CheckCircle2 size={11} color="#3fb950" /> : <Icons.Clock3 size={11} />}
+                    </button>
+                  )
+                })}
+              </div>
+              <button onClick={() => setConfirming(true)} disabled={!selectedBackup}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ background: 'rgba(88,166,255,0.12)', color: '#58a6ff', border: '1px solid rgba(88,166,255,0.35)' }}>
+                <Icons.PlayCircle size={14} />Run restore drill
+              </button>
+            </>
+          )}
+        </>
+      )}
+
+      {drill === 'loading' && (
+        <div className="flex items-center gap-2 text-xs" style={{ color: '#8b949e' }}>
+          <Loader2 size={13} className="animate-spin" />Creating {drillName}…
+        </div>
+      )}
+
+      {drill && drill !== 'loading' && (
+        <div className="rounded-lg border p-3" style={{ background: '#0d1117', borderColor: '#21262d' }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-mono" style={{ color: '#e6edf3' }}>{drillName}</span>
+            <StatusBadge status={drill.status} small />
+          </div>
+          {drill.statusMessage && <p className="text-xs mb-3" style={{ color: '#8b949e' }}>{drill.statusMessage}</p>}
+          {drill.status === 'Running' && (
+            <p className="text-xs mb-3" style={{ color: '#3fb950' }}>
+              Restore succeeded — this instance booted from the backup and is Ready. The backup is good.
+            </p>
+          )}
+          <button onClick={cleanup} disabled={busy}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
+            style={{ background: 'rgba(248,81,73,0.12)', color: '#f85149', border: '1px solid rgba(248,81,73,0.35)' }}>
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <Icons.Trash2 size={12} />}Delete drill instance
+          </button>
+        </div>
+      )}
+
+      {confirming && (
+        <ConfirmModal
+          title="Run a restore drill?"
+          description={`Creates a new MariaDB instance "${drillName}" in namespace "${namespace}", bootstrapped from backup "${selectedBackup}". You'll need to delete it yourself when done.`}
+          confirmWord={drillName}
+          actionLabel={<><Icons.PlayCircle size={13} />Run drill</>}
+          danger={false}
+          busy={busy}
+          error={error}
+          onCancel={() => { setConfirming(false); setError(null) }}
+          onConfirm={startDrill}
+        />
+      )}
+    </div>
+  )
+}
+
+function ResilienceTab({ namespace, name, detail, onRefreshDetail }) {
+  return (
+    <div className="space-y-4">
+      <PodFailoverDrill namespace={namespace} name={name} detail={detail} onRefreshDetail={onRefreshDetail} />
+      <RestoreDrill namespace={namespace} name={name} />
+    </div>
+  )
+}
+
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function InstanceDetail({ instanceKey, setPage }) {
-  const { namespace, name } = instanceKey
+  const { namespace, name, tab: initialTab, crdKind: initialCrdKind } = instanceKey
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]   = useState(null)
-  const [tab, setTab]       = useState('overview')
+  const [tab, setTab]       = useState(initialTab || 'overview')
   const [refreshing, setRefreshing] = useState(false)
 
   const fetchDetail = useCallback(async (spinner = false) => {
@@ -1005,11 +1638,12 @@ export default function InstanceDetail({ instanceKey, setPage }) {
           {/* Tab content */}
           {tab === 'overview'    && <OverviewTab detail={detail} namespace={namespace} name={name} onRefresh={() => fetchDetail(true)} />}
           {tab === 'pods'        && <PodsTab namespace={namespace} name={name} primary={detail.primary} />}
-          {tab === 'replication' && <ReplicationTab detail={detail} />}
+          {tab === 'replication' && <ReplicationTab namespace={namespace} name={name} detail={detail} />}
           {tab === 'services'    && <ServicesTab namespace={namespace} name={name} />}
           {tab === 'tls'         && <TLSTab tls={detail.tls} tlsEnabled={detail.tlsEnabled} />}
-          {tab === 'crds'        && <CrdsPanel namespace={namespace} instanceName={name} />}
+          {tab === 'crds'        && <CrdsPanel namespace={namespace} instanceName={name} initialKind={initialCrdKind} />}
           {tab === 'events'      && <EventsTab namespace={namespace} name={name} />}
+          {tab === 'resilience'  && <ResilienceTab namespace={namespace} name={name} detail={detail} onRefreshDetail={() => fetchDetail(true)} />}
         </>
       )}
     </div>
