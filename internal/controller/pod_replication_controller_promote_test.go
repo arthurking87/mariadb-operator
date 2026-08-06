@@ -148,7 +148,8 @@ func TestPodReplicationController_promoteReplica_HappyPath(t *testing.T) {
 	}
 
 	var gotMariadb mariadbv1alpha1.MariaDB
-	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: mariadb.Name, Namespace: mariadb.Namespace}, &gotMariadb); err != nil {
+	mariadbKey := types.NamespacedName{Name: mariadb.Name, Namespace: mariadb.Namespace}
+	if err := fakeClient.Get(context.Background(), mariadbKey, &gotMariadb); err != nil {
 		t.Fatalf("error getting MariaDB: %v", err)
 	}
 	if gotMariadb.Spec.Replication.Primary.PodIndex == nil || *gotMariadb.Spec.Replication.Primary.PodIndex != newPrimary {
