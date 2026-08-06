@@ -151,7 +151,9 @@ func TestConfigurePrimary_DisablesReadOnlyAfterGtidSlavePosNoValueForDomainError
 
 	conn := &recordingConn{
 		failExecContains: "gtid_slave_pos",
-		failErr:          errors.New("Error 1948 (HY000): Specified value for @@gtid_slave_pos contains no value for replication domain 0. This conflicts with the binary log which contains GTID 0-11-1176. If MASTER_GTID_POS=CURRENT_POS is used, the binlog position will override the new value of @@gtid_slave_pos"),
+		failErr: errors.New("Error 1948 (HY000): Specified value for @@gtid_slave_pos contains no value for " +
+			"replication domain 0. This conflicts with the binary log which contains GTID 0-11-1176. If " +
+			"MASTER_GTID_POS=CURRENT_POS is used, the binlog position will override the new value of @@gtid_slave_pos"),
 	}
 	db := stddb.OpenDB(&recordingConnector{conn: conn})
 	defer db.Close()
