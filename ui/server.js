@@ -297,14 +297,16 @@ function buildCRYAML(apiKind, metadata, spec) {
 // List instances of a CRD kind. Instance-scoped kinds are additionally filtered by
 // spec.mariaDbRef.name (or spec.physicalBackupRef.name for PointInTimeRecovery) when a
 // `mariadb`/`ref` query param is given, so a single MariaDB instance's detail page only
-// sees resources that actually belong to it.
+// sees resources that actually belong to it. `namespace` itself is optional — omit it to
+// list across every namespace (used by the cross-instance Backups page), same as `kubectl
+// get <kind> -A`.
 app.get('/api/crd/:kind', async (req, res) => {
   const entry = crdEntry(req.params.kind)
   if (!entry) return res.status(400).json({ error: `unknown resource kind: ${req.params.kind}` })
   const { namespace, ref, refField } = req.query
-  if (!namespace) return res.status(400).json({ error: 'namespace is required' })
   try {
-    const { stdout } = await execFileAsync('kubectl', ['get', entry.plural, '-n', namespace, '-o', 'json'])
+    const scopeArgs = namespace ? ['-n', namespace] : ['-A']
+    const { stdout } = await execFileAsync('kubectl', ['get', entry.plural, ...scopeArgs, '-o', 'json'])
     let items = JSON.parse(stdout).items
     if (ref && refField) {
       items = items.filter(i => i.spec?.[refField]?.name === ref)
@@ -422,10 +424,29 @@ app.get('/api/storageclasses', async (req, res) => {
 // List all MariaDB instances across namespaces
 app.get('/api/instances', async (req, res) => {
   try {
-    const { stdout } = await execAsync(
-      `kubectl get mariadb -A -o json`
-    )
-    const data = JSON.parse(stdout)
+    // Backup/PhysicalBackup are fetched best-effort alongside the instance list, purely to
+    // compute `hasScheduledBackup` per instance (same "any Backup/PhysicalBackup CR owned by
+    // this instance with spec.schedule.cron set" check as the Backups page). If either list
+    // fails (e.g. one of the CRDs isn't installed), degrade to "unknown" for every instance
+    // rather than taking down the whole Instances page over it.
+    const [mdbOut, backupOut, physicalBackupOut] = await Promise.all([
+      execAsync(`kubectl get mariadb -A -o json`),
+      execAsync(`kubectl get backups -A -o json`).catch(() => null),
+      execAsync(`kubectl get physicalbackups -A -o json`).catch(() => null),
+    ])
+    const data = JSON.parse(mdbOut.stdout)
+
+    const scheduledBackupOwners = new Set()
+    let backupListOk = true
+    for (const out of [backupOut, physicalBackupOut]) {
+      if (!out) { backupListOk = false; continue }
+      for (const b of JSON.parse(out.stdout).items) {
+        if (b.spec?.schedule?.cron && b.spec?.mariaDbRef?.name) {
+          scheduledBackupOwners.add(`${b.metadata.namespace}/${b.spec.mariaDbRef.name}`)
+        }
+      }
+    }
+
     const instances = data.items.map(item => {
       const meta = item.metadata
       const spec = item.spec
@@ -459,6 +480,7 @@ app.get('/api/instances', async (req, res) => {
         version: spec.image?.tag ?? status.defaultVersion ?? '—',
         storage: spec.storage?.size ?? '—',
         age,
+        hasScheduledBackup: backupListOk ? scheduledBackupOwners.has(`${meta.namespace}/${meta.name}`) : null,
       }
     })
     res.json({ instances })

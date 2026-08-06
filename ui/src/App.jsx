@@ -6,6 +6,7 @@ import CreateMariaDB from './pages/CreateMariaDB'
 import InstanceDetail from './pages/InstanceDetail'
 import Capacity from './pages/Capacity'
 import Switchover from './pages/Switchover'
+import Backups from './pages/Backups'
 import Activity from './pages/Activity'
 import Docs from './pages/Docs'
 import Settings from './pages/Settings'
@@ -35,6 +36,7 @@ export default function App() {
           {page === 'detail'    && <InstanceDetail instanceKey={selectedInstance} setPage={navigate} />}
           {page === 'capacity'  && <Capacity setPage={navigate} />}
           {page === 'switchover' && <Switchover setPage={navigate} />}
+          {page === 'backups'   && <Backups setPage={navigate} />}
           {page === 'activity'  && <Activity />}
           {page === 'docs'      && <Docs />}
           {page === 'settings'  && <Settings />}

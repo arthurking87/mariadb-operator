@@ -119,8 +119,8 @@ function FieldInput({ field, value, onChange, namespace, instanceName }) {
 // password -> Secret -> *SecretKeyRef flow transparently: if the schema has any password
 // field, a Secret named `<resource-name>-<field-key>` is created first via POST
 // /api/secrets, then the CR is created referencing it.
-export default function CreateResourceModal({ schema, namespace, instanceName, onClose, onCreated }) {
-  const [values, setValues] = useState(initialValues(schema))
+export default function CreateResourceModal({ schema, namespace, instanceName, onClose, onCreated, prefill, title }) {
+  const [values, setValues] = useState({ ...initialValues(schema), ...prefill })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
 
@@ -185,7 +185,7 @@ export default function CreateResourceModal({ schema, namespace, instanceName, o
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>New {schema.label}</h2>
+          <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>{title || `New ${schema.label}`}</h2>
           <button onClick={onClose} style={{ color: '#8b949e', background: 'none', border: 'none', cursor: 'pointer' }}>
             <X size={18} />
           </button>

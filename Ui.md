@@ -3,6 +3,38 @@
 > 產生日期：2026-08-05。記錄 `ui/` 這個 React + Express 小面板的現況、異動決策，以及尚未實作項目的規劃討論。
 > 面板結構：`ui/src/App.jsx`（路由）+ `ui/src/components/Sidebar.jsx`（左側導覽）+ `ui/src/pages/*.jsx`（各頁）+ `ui/server.js`（Express API，包在同一個容器內用 `kubectl`/`helm` 操作叢集）。
 
+## 新增 Backups 頁面（跨 instance 備份/還原總覽）+ Dashboard 加上備份排程指示（2026-08-06）
+
+延續上一輪「業界功能落差分析」的討論，你要求依照分析結果實作 Backup/Restore 排程頁，之後又追加一個小需求：Instances 頁面加上有沒有排程備份的欄位。
+
+### 1. Backups 頁面（新側欄項目，Archive 圖示）
+
+跟你確認過現有 Backup/Restore 相關 UI 只有三處都不是「排程頁」：New Instance 精靈的 Backup 步驟（只在建立當下能設定，建完就沒了）、CRDs 分頁的泛用表單（看不到實際跑過幾次、成功了沒）、Resilience 分頁的 Restore Drill（定位是測試用，會建一個拋棄式的 `<instance>-drill`）。這次做的是補上「跨 instance 總覽 + 真正的還原流程」這塊空白。
+
+**架構決策**：沒有另外寫一套 CRD schema，直接複用既有的 `crdSchemas.js`/`CreateResourceModal`/`formUtils.js` 這套泛用引擎（`backup`/`restore`/`physicalbackup`/`pointintimerecovery` 這幾個 schema 本來就齊全，包含 `buildSpec`、欄位定義、`ref-select` 邏輯）。真正要動的只有：
+
+1. **`server.js` 的 `GET /api/crd/:kind`**：`namespace` 從必填改成選填——不帶就用 `kubectl get <kind> -A` 列出所有 namespace，其餘既有的 CRDs 分頁（`ResourceTab.jsx` 一律帶 namespace）完全不受影響，純加法。
+2. **`CreateResourceModal.jsx`** 加了 `prefill`/`title` 兩個選填 prop（預設不傳等於原本行為），讓 Backups 頁的「Restore」按鈕可以直接把 `backupRef`/`name` 帶進表單，不用使用者自己重新選一次備份。
+
+**頁面內容**：4 張統計卡（Backups 總數／沒排程的 instance 數／需要注意的失敗數／Restore job 數）+ 3 張表：
+- **Backups**：合併 `Backup` + `PhysicalBackup`，秀 instance/名稱/類型/存放位置/排程/狀態/建立時間；`Backup` 類型的列有「Restore」按鈕（`PhysicalBackup` 沒有，因為它的還原路徑是 PITR，另一套流程）；右上角選一個 instance 就能建新 Backup。
+- **Restores**：所有 `Restore` CR 的執行歷史（唯讀 + 可刪除）。
+- **Point-in-Time Recovery**：唯讀列表，因為 `PointInTimeRecoverySpec` 本身沒有 `mariaDbRef`，只有 `physicalBackupRef`，所以「這個 PITR 屬於哪個 instance」是額外拿 physicalbackups 清單反查回來的（比對 `physicalBackupRef.name`）。
+
+**沒做的，刻意跳過**：Percona Everest 那種「用備份長出一個全新 instance」——查了 `Restore` CRD 的 spec（`mariaDbRef` 是必填），確認它的語意是還原進一個**已存在**的 instance，不是建新的；「建新 instance」要走 `bootstrapFrom.backupRef`，這條路 Resilience 分頁的 Restore Drill 已經在用（測試用途，固定拋棄式命名）。要做成正式功能等於要重用 New Instance 精靈整套輸入（名稱、replicas、storage、image 版本…），範圍明顯是另一個獨立功能，這次沒做。PITR 的「New」也先跳過，因為現在叢集裡沒有接 S3/Azure 的 PhysicalBackup 可以實測這條路徑。
+
+**驗證時抓到並修掉一個 bug**：Status 欄位一開始只認字面 `'Ready'`/`'Complete'` 這兩個字才顯示綠色勾勾，但實測 `test1/pmm-verify-backup-1` 這個真的 Backup CR，`kubectl` 顯示的 condition reason 其實是 `JobComplete`（查了 `pkg/condition/complete.go`，operator 對已完成的 Job 一律用 `ConditionReasonJobComplete = "JobComplete"` 這個 reason，不是單純的 `"Complete"`），導致明明成功的備份被畫成灰色時鐘圖示而不是綠色勾勾。改成直接看 condition 的 `status === 'True'` 判斷成功與否，不比對 reason 文字。
+
+**驗證**：`npx vite build` 過、`node --check server.js` 過；無頭 Chrome 截圖確認真實資料正確載入（`test1/pmm-verify` 的一次性備份、2 個沒排程的 instance 正確列出並可點擊跳轉到詳情頁）；用暫時把 `restoreTarget` 的 state 預設值改成一筆真實資料再截圖的方式，確認 Restore 彈窗的標題／預填名稱／預選備份三者都正確帶入（截圖後改回 `null`）。
+
+### 2. Dashboard 加上「有沒有排程備份」欄位
+
+`server.js` 的 `GET /api/instances` 併發多打兩支 `kubectl get backups -A` / `kubectl get physicalbackups -A`，算出每個 instance 有沒有任一個 Backup/PhysicalBackup CR 帶 `spec.schedule.cron`，回傳新欄位 `hasScheduledBackup`。刻意做成「任一支 kubectl 失敗就整批降級成 `null`（畫面顯示 `—`）」，而不是讓失敗直接讓整個 `/api/instances` 噴 500——這支 API 是 Dashboard 的核心資料來源，備份清單抓不到不該連累整個 Instances 頁面掛掉。
+
+`Dashboard.jsx` 表格新增「Backup」欄，跟 Backups 頁同一套配色：綠色勾勾「Scheduled」/ 橘色警示「No schedule」/ 灰色 `—`（未知）。
+
+**驗證**：`curl /api/instances` 確認欄位正確回傳（`test1` 底下兩個 instance 一開始都是 `false`）；截圖確認畫面正確顯示「No schedule」；手動建一個帶 `cron: "0 3 * * *"` 的 Backup CR 指到 `test-db-1` 後重新整理，確認該列正確變成綠色「Scheduled」、另一列維持橘色「No schedule」，兩種狀態視覺上都驗證過，測試用的 Backup CR 事後已刪除。
+
 ## Switchover 頁面兩個修正：Refresh 按鈕被文字卡住、補上 10 秒自動刷新（2026-08-06）
 
 ### 1. Header 的 Refresh 按鈕被說明文字擠到中間

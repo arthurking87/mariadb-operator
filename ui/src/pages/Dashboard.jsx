@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Plus, Search, RefreshCw, Database, Server, HardDrive, Clock,
-         Zap, AlertCircle, Loader2, Trash2, X, AlertTriangle,
+         Zap, AlertCircle, Loader2, Trash2, X, AlertTriangle, CheckCircle2,
          ChevronDown, SlidersHorizontal } from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
@@ -20,6 +20,19 @@ function StatusBadge({ status }) {
       style={{ background: s.bg, color: s.color }}>
       <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s.dot }} />
       {status}
+    </span>
+  )
+}
+
+function BackupBadge({ scheduled }) {
+  if (scheduled === null) return <span className="text-xs" style={{ color: '#8b949e' }}>—</span>
+  return scheduled ? (
+    <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: '#3fb950' }}>
+      <CheckCircle2 size={12} />Scheduled
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: '#d29922' }}>
+      <AlertTriangle size={12} />No schedule
     </span>
   )
 }
@@ -405,7 +418,7 @@ export default function Dashboard({ setPage: navigate }) {
           <table className="w-full">
             <thead>
               <tr style={{ borderBottom: '1px solid #21262d' }}>
-                {['Name', 'Namespace', 'Type', 'Replicas', 'Primary', 'Version', 'Storage', 'Age', 'Status', ''].map(h => (
+                {['Name', 'Namespace', 'Type', 'Replicas', 'Primary', 'Version', 'Storage', 'Backup', 'Age', 'Status', ''].map(h => (
                   <th key={h} className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider"
                     style={{ color: '#8b949e' }}>{h}</th>
                 ))}
@@ -448,6 +461,9 @@ export default function Dashboard({ setPage: navigate }) {
                   <td className="px-5 py-3.5 text-xs font-mono" style={{ color: '#8b949e' }}>{inst.primary}</td>
                   <td className="px-5 py-3.5 text-sm" style={{ color: '#8b949e' }}>{inst.version}</td>
                   <td className="px-5 py-3.5 text-sm" style={{ color: '#8b949e' }}>{inst.storage}</td>
+                  <td className="px-5 py-3.5">
+                    <BackupBadge scheduled={inst.hasScheduledBackup} />
+                  </td>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-1 text-xs" style={{ color: '#8b949e' }}>
                       <Clock size={11} />{inst.age}
