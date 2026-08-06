@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metrics"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
@@ -16,10 +19,26 @@ import (
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 )
+
+const (
+	metricResultSuccess = "success"
+	metricResultFailure = "failure"
+)
+
+// recordSwitchoverResult records the top-level switchover metrics exactly once for a
+// given switchover, at whichever reconcile call reaches a terminal outcome (success or
+// a non-retryable failure). It must not be called from phases that will be retried.
+func recordSwitchoverResult(ns, mdbName, fromIndex, toIndex string, start time.Time, result string) {
+	duration := time.Since(start).Seconds()
+	metrics.SwitchoverDuration.WithLabelValues(ns, mdbName, result).Observe(duration)
+	metrics.SwitchoverLastDuration.WithLabelValues(ns, mdbName).Set(duration)
+	metrics.SwitchoverTotal.WithLabelValues(ns, mdbName, fromIndex, toIndex, result).Inc()
+}
 
 type switchoverPhase struct {
 	name      string
@@ -135,10 +154,42 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		logger.Info("Resuming switchover: new primary was already configured in a previous attempt")
 	}
 
+	ns := req.mariadb.Namespace
+	mdbName := req.mariadb.Name
+
+	fromIndex := strconv.Itoa(int(*primary))
+	toIndex := strconv.Itoa(int(newPrimary))
+
+	// A single switchover spans multiple reconcile calls: every retry re-enters this
+	// function from the first phase. Use the PrimarySwitched condition's
+	// LastTransitionTime as the switchover start instead of time.Now(), since
+	// meta.SetStatusCondition only bumps it when the Status value actually changes,
+	// so it keeps pointing at when this switchover first began across retries.
+	switchoverStart := time.Now()
+	if cond := meta.FindStatusCondition(req.mariadb.Status.Conditions, mariadbv1alpha1.ConditionTypePrimarySwitched); cond != nil {
+		switchoverStart = cond.LastTransitionTime.Time
+	}
+
 	for _, p := range phases {
-		if err := p.reconcile(ctx, req, logger.WithValues("phase", p.name)); err != nil {
-			if apierrors.IsNotFound(err) {
-				return err
+		phaseStart := time.Now()
+		phaseErr := p.reconcile(ctx, req, logger.WithValues("phase", p.name))
+		phaseDuration := time.Since(phaseStart).Seconds()
+		phaseResult := metricResultSuccess
+		if phaseErr != nil {
+			phaseResult = metricResultFailure
+		}
+		phaseLabel := strings.ToLower(strings.ReplaceAll(p.name, " ", "_"))
+		metrics.SwitchoverPhaseDuration.WithLabelValues(ns, mdbName, phaseLabel, phaseResult).Observe(phaseDuration)
+		metrics.SwitchoverPhaseLastDuration.WithLabelValues(ns, mdbName, phaseLabel).Set(phaseDuration)
+
+		if phaseErr != nil {
+			// Only record the switchover as terminally failed when it won't be retried
+			// (the MariaDB/Pod/etc. it depends on is gone). Any other phase error is
+			// transient and will re-enter this function on the next reconcile, so
+			// recording it here would count one logical switchover multiple times.
+			if apierrors.IsNotFound(phaseErr) {
+				recordSwitchoverResult(ns, mdbName, fromIndex, toIndex, switchoverStart, metricResultFailure)
+				return phaseErr
 			}
 			// A failure before the new primary is configured (most commonly "Wait sync"
 			// timing out on a lagging replica) would otherwise leave the primary locked +
@@ -155,10 +206,10 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 				logger.Error(rollbackErr, "error rolling back switchover after failed phase", "phase", p.name)
 			}
 			if !p.rollbackOnFailure {
-				logger.Error(err, "switchover failed after the new primary was configured; "+
+				logger.Error(phaseErr, "switchover failed after the new primary was configured; "+
 					"leaving the old primary read-only to avoid a dual-writable cluster", "phase", p.name)
 			}
-			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, err)
+			return fmt.Errorf("error in %s switchover reconcile phase: %v", p.name, phaseErr)
 		}
 		if p.afterSuccess != nil {
 			if err := p.afterSuccess(ctx, req, logger.WithValues("phase", p.name)); err != nil {
@@ -176,6 +227,7 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 	}); err != nil {
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
+	recordSwitchoverResult(ns, mdbName, fromIndex, toIndex, switchoverStart, metricResultSuccess)
 
 	logger.Info("Primary switched")
 	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitched,
