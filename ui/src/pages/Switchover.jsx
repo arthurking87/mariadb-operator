@@ -143,16 +143,25 @@ export default function Switchover({ setPage }) {
   const selectedCount = rows?.filter(r => r.selected).length ?? 0
 
   return (
-    <div className="px-8 py-8 max-w-5xl mx-auto">
+    <div className="px-8 py-8 max-w-[1800px] mx-auto">
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
-        <div className="min-w-0 flex-1 pr-6">
-          <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Switchover</h1>
-          <p className="text-sm mt-0.5 break-words" style={{ color: '#8b949e' }}>
-            Planned primary handover — uses the operator's own <code>spec.replication.primary.podIndex</code> /{' '}
-            <code>spec.galera.primary.podIndex</code> mechanism, not a chaos pod-delete. Pick a target replica per instance,
-            select the ones you want, and run them together.
-          </p>
+        <div className="min-w-0 flex-1 pr-6 flex items-start gap-3.5">
+          {/* Page-title badge, same treatment as Dashboard/Backups/Capacity — amber echoes
+              this page's own "switching" status color (see statusMeta above) rather than
+              colliding with Dashboard's blue or Backups' orange. */}
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+            style={{ background: 'rgba(210,153,34,0.12)', borderColor: 'rgba(210,153,34,0.3)' }}>
+            <ArrowRightLeft size={20} color="#d29922" strokeWidth={2.25} />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Switchover</h1>
+            <p className="text-sm mt-0.5 break-words" style={{ color: '#8b949e' }}>
+              Planned primary handover — uses the operator's own <code>spec.replication.primary.podIndex</code> /{' '}
+              <code>spec.galera.primary.podIndex</code> mechanism, not a chaos pod-delete. Pick a target replica per instance,
+              select the ones you want, and run them together.
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border flex-shrink-0" style={{ borderColor: '#30363d' }}>
           <CountdownRing count={count} total={total} paused={paused} onTogglePause={togglePause} />
@@ -202,7 +211,7 @@ export default function Switchover({ setPage }) {
                 cursor: selectedCount > 0 && !running ? 'pointer' : 'not-allowed',
               }}
             >
-              {running ? <Loader2 size={14} className="animate-spin" /> : <ArrowRightLeft size={14} />}
+              {running ? <Loader2 size={13} className="animate-spin" /> : <ArrowRightLeft size={13} />}
               Run {selectedCount || ''} switchover{selectedCount === 1 ? '' : 's'}
             </button>
           </div>

@@ -8,6 +8,7 @@ import * as Icons from 'lucide-react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import CountdownRing from '../components/CountdownRing'
 import ResourceTab from '../components/crd/ResourceTab'
+import PermissionsMatrix from '../components/crd/PermissionsMatrix'
 import { CRD_SCHEMAS, INSTANCE_CRD_TABS } from '../lib/crdSchemas'
 import { getSettings } from '../lib/settings'
 
@@ -62,8 +63,8 @@ function MetaCard({ label, value, icon: Icon, accent, mono }) {
 function SectionHeader({ icon: Icon, title, accent = '#8b949e' }) {
   return (
     <div className="flex items-center gap-2 mb-4">
-      <Icon size={15} color={accent} />
-      <h2 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>{title}</h2>
+      <Icon size={16} color={accent} />
+      <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>{title}</h2>
     </div>
   )
 }
@@ -557,33 +558,49 @@ function TabBar({ active, setActive, type }) {
 
 // ── CRDs panel (secondary nav for the 9 CRD tabs) ───────────────────────────────
 
+// "permissions" is a pseudo-kind: it renders PermissionsMatrix instead of the generic
+// ResourceTab, sitting alongside (not replacing) the raw Users/Grants CRUD tabs — same
+// underlying Grant CRs, just a matrix view instead of a flat list.
+const CRDS_PANEL_TABS = ['permissions', ...INSTANCE_CRD_TABS]
+
 function CrdsPanel({ namespace, instanceName, initialKind }) {
-  const [kind, setKind] = useState(INSTANCE_CRD_TABS.includes(initialKind) ? initialKind : INSTANCE_CRD_TABS[0])
-  const schema = CRD_SCHEMAS[kind]
+  const [kind, setKind] = useState(CRDS_PANEL_TABS.includes(initialKind) ? initialKind : 'permissions')
+  const schema = kind === 'permissions' ? null : CRD_SCHEMAS[kind]
 
   return (
     <div>
       <div className="flex items-center flex-wrap gap-1.5 mb-5">
-        {INSTANCE_CRD_TABS.map(k => {
-          const s = CRD_SCHEMAS[k]
-          const Icon = Icons[s.icon] || Icons.Box
+        {CRDS_PANEL_TABS.map(k => {
+          const isPermissions = k === 'permissions'
+          const Icon = isPermissions ? Icons.Grid3x3 : (Icons[CRD_SCHEMAS[k].icon] || Icons.Box)
+          const label = isPermissions ? 'Permissions' : CRD_SCHEMAS[k].pluralLabel
+          // Each CRD kind already carries its own identity color in crdSchemas.js (Database
+          // blue, User green, Grant purple, Backup orange, …) but previously every tab lit up
+          // identically orange when selected, hiding that identity. Selecting a tab now lights
+          // it up in its own kind's color instead — inactive tabs stay neutral gray so the bar
+          // doesn't turn into a rainbow at rest, only the active selection carries color.
+          const accent = isPermissions ? '#8b949e' : CRD_SCHEMAS[k].accent
           const on = kind === k
           return (
             <button
               key={k} onClick={() => setKind(k)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
               style={{
-                background: on ? 'rgba(249,115,22,0.12)' : 'transparent',
-                borderColor: on ? '#f97316' : '#30363d',
-                color: on ? '#f97316' : '#8b949e',
+                background: on ? accent + '1f' : 'transparent',
+                borderColor: on ? accent : '#30363d',
+                color: on ? accent : '#8b949e',
               }}
+              onMouseEnter={e => { if (!on) e.currentTarget.style.borderColor = accent + '80' }}
+              onMouseLeave={e => { if (!on) e.currentTarget.style.borderColor = '#30363d' }}
             >
-              <Icon size={13} />{s.pluralLabel}
+              <Icon size={13} color={on ? accent : undefined} />{label}
             </button>
           )
         })}
       </div>
-      <ResourceTab schema={schema} namespace={namespace} instanceName={instanceName} />
+      {kind === 'permissions'
+        ? <PermissionsMatrix namespace={namespace} instanceName={instanceName} />
+        : <ResourceTab schema={schema} namespace={namespace} instanceName={instanceName} />}
     </div>
   )
 }
@@ -603,6 +620,14 @@ function HealthChecklist({ detail, namespace, name }) {
   const isHA = detail.type !== 'Standalone' && detail.replicas > 1
   const targetVersion = getSettings().latestMariadbVersion
   const behind = isVersionBehind(detail.version, targetVersion)
+  // Same "days until expiry" math and 30-day urgent threshold the TLS tab already uses per
+  // cert (see TLSTab's daysLeft/expColor) — checks whichever of the server/client leaf certs
+  // expires soonest, since either one lapsing breaks connections. Skipped entirely when TLS
+  // isn't enabled (nothing to check, and "TLS encryption enabled" already covers that gap).
+  const tlsCerts = [detail.tls?.serverCert, detail.tls?.clientCert].filter(Boolean)
+  const tlsDaysLeft = tlsCerts.length
+    ? Math.min(...tlsCerts.map(c => Math.floor((new Date(c.notAfter) - Date.now()) / 86400000)))
+    : null
   const checks = [
     {
       label: 'Resource requests/limits set', ok: !!(detail.resources?.cpuLimit && detail.resources?.memLimit),
@@ -612,6 +637,12 @@ function HealthChecklist({ detail, namespace, name }) {
       label: 'TLS encryption enabled', ok: detail.tlsEnabled,
       why: 'Client↔server traffic is in plaintext otherwise.',
     },
+    ...(detail.tlsEnabled && tlsDaysLeft != null ? [{
+      label: 'TLS certificate not expiring within 30 days', ok: tlsDaysLeft >= 30,
+      why: tlsDaysLeft < 0
+        ? `Certificate expired ${Math.abs(tlsDaysLeft)} day(s) ago — TLS connections may already be failing. See the TLS tab and rotate it.`
+        : `Expires in ${tlsDaysLeft} day(s). See the TLS tab for which certificate and rotate it before it lapses.`,
+    }] : []),
     {
       label: 'Scheduled (recurring) backup', ok: hasScheduledBackup,
       why: 'A one-off backup goes stale; only a cron schedule keeps you covered over time.',
@@ -622,8 +653,14 @@ function HealthChecklist({ detail, namespace, name }) {
       why: isHA ? null : 'Standalone / single-replica — a lost pod means downtime until it reschedules, with no automatic failover.',
     },
     {
-      label: 'Monitoring connected (PMM or metrics)', ok: detail.pmmEnabled || detail.metricsEnabled,
-      why: 'No visibility into query performance or resource pressure until something is already broken.',
+      // Checks metricsReady (the exporter Deployment is actually up), not metricsEnabled
+      // (just the spec flag) — the operator silently skips creating the exporter entirely
+      // if the ServiceMonitor CRD isn't installed, so "enabled in spec" alone can be a lie.
+      label: 'Monitoring connected (PMM or metrics)', ok: detail.pmmEnabled || detail.metricsReady,
+      why: detail.pmmEnabled || detail.metricsReady ? null
+        : detail.metricsEnabled
+          ? 'Metrics is enabled in spec, but the exporter Pod isn\'t actually running — check the Events tab (a missing ServiceMonitor CRD is the usual cause).'
+          : 'No visibility into query performance or resource pressure until something is already broken.',
     },
     {
       label: `Up to date (target: ${targetVersion})`, ok: !behind,
@@ -635,32 +672,48 @@ function HealthChecklist({ detail, namespace, name }) {
   const scoreColor = passed === loaded.length ? '#3fb950' : passed >= loaded.length / 2 ? '#d29922' : '#f85149'
 
   return (
-    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
+    // Raised surface (#1a2028, vs. the standard #161b22 card tone below it) — this is the
+    // single widget on the Overview tab meant to grab attention first, so it gets the page's
+    // "primary" elevation while the meta/feature/condition cards beneath it stay secondary.
+    <div className="rounded-xl border p-4" style={{ background: '#1a2028', borderColor: '#21262d' }}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <Icons.HeartPulse size={15} color={scoreColor} />
-          <h2 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>Config Health</h2>
+          <Icons.HeartPulse size={16} color={scoreColor} />
+          <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>Config Health</h2>
         </div>
         <span className="text-xs font-mono px-2 py-0.5 rounded-full font-semibold" style={{ background: scoreColor + '22', color: scoreColor }}>
           {passed}/{loaded.length}
         </span>
       </div>
-      <div className="space-y-2">
-        {checks.map(c => (
-          <div key={c.label} className="flex items-start justify-between py-1.5 border-b last:border-0" style={{ borderColor: '#21262d' }}>
-            <div>
-              <div className="flex items-center gap-2">
-                {c.loading
-                  ? <Loader2 size={13} className="animate-spin" color="#8b949e" />
-                  : c.ok ? <CheckCircle2 size={13} color="#3fb950" /> : <XCircle size={13} color="#d29922" />}
-                <span className="text-sm" style={{ color: '#e6edf3' }}>{c.label}</span>
+      <div className="space-y-1">
+        {checks.map((c, i) => {
+          // Rows that need attention carry real visual weight of their own — a tinted
+          // background and colored left edge on the row, not just a differently-colored
+          // icon — so the eye catches the problem without reading every line. Passing rows
+          // recede (muted label, thin divider) so the contrast does the scanning for you.
+          const attention = !c.loading && !c.ok
+          return (
+            <div key={c.label}
+              className="flex items-start justify-between py-2 pl-2.5 pr-2 -mx-0.5 rounded-lg transition-colors"
+              style={{
+                background: attention ? 'rgba(210,153,34,0.08)' : 'transparent',
+                borderLeft: `2px solid ${attention ? '#d29922' : 'transparent'}`,
+                borderBottom: !attention && i < checks.length - 1 ? '1px solid #21262d' : 'none',
+              }}>
+              <div>
+                <div className="flex items-center gap-2">
+                  {c.loading
+                    ? <Loader2 size={13} className="animate-spin" color="#8b949e" />
+                    : c.ok ? <CheckCircle2 size={13} color="#3fb950" /> : <XCircle size={13} color="#d29922" />}
+                  <span className="text-sm" style={{ color: attention ? '#e6edf3' : '#8b949e', fontWeight: attention ? 600 : 400 }}>{c.label}</span>
+                </div>
+                {attention && c.why && (
+                  <p className="text-xs mt-1 ml-5" style={{ color: '#8b949e' }}>{c.why}</p>
+                )}
               </div>
-              {!c.loading && !c.ok && c.why && (
-                <p className="text-xs mt-1 ml-5" style={{ color: '#8b949e' }}>{c.why}</p>
-              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -743,10 +796,120 @@ function OverviewTab({ detail, namespace, name, onRefresh }) {
   )
 }
 
+const TAIL_OPTIONS = [100, 200, 500, 1000, 2000]
+
+// Log viewer modal for a single pod. Container tabs come from the pod's own containers
+// array (already fetched by PodsTab, no extra round trip needed to know what's available —
+// e.g. mariadb/agent, plus pmm-client if PMM is enabled). Manual refresh only, no polling:
+// this is "what does the log say right now", not a live tail, and re-fetching a few hundred
+// lines every few seconds for something that might sit open a while isn't worth the load.
+function LogsModal({ namespace, name, pod, onClose }) {
+  const containerNames = pod.containers.map(c => c.name)
+  const [container, setContainer] = useState(containerNames[0])
+  const [tailLines, setTailLines] = useState(200)
+  const [logs, setLogs] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const logRef = useRef(null)
+
+  const fetchLogs = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${name}/pods/${pod.name}/logs?container=${container}&tailLines=${tailLines}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setLogs(data.logs)
+    } catch (e) {
+      setError(e.message)
+      setLogs('')
+    } finally {
+      setLoading(false)
+    }
+  }, [namespace, name, pod.name, container, tailLines])
+
+  useEffect(() => { fetchLogs() }, [fetchLogs])
+  useEffect(() => {
+    if (!loading && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [loading, logs])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
+      <div
+        className="w-full max-w-4xl rounded-xl border flex flex-col"
+        style={{ background: '#161b22', borderColor: '#21262d', height: '80vh' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b flex-shrink-0" style={{ borderColor: '#21262d' }}>
+          <div className="flex items-center gap-2 min-w-0">
+            <Icons.ScrollText size={15} color="#8b949e" className="flex-shrink-0" />
+            <h3 className="text-sm font-semibold font-mono truncate" style={{ color: '#e6edf3' }}>{pod.name}</h3>
+          </div>
+          <button onClick={onClose} style={{ color: '#8b949e', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-b flex-shrink-0 flex-wrap" style={{ borderColor: '#21262d' }}>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {containerNames.map(c => {
+              const on = c === container
+              return (
+                <button
+                  key={c} onClick={() => setContainer(c)}
+                  className="px-2.5 py-1 rounded-md text-xs font-medium border transition-all"
+                  style={{
+                    background: on ? 'rgba(249,115,22,0.12)' : 'transparent',
+                    borderColor: on ? '#f97316' : '#30363d',
+                    color: on ? '#f97316' : '#8b949e',
+                  }}
+                >{c}</button>
+              )
+            })}
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={tailLines} onChange={e => setTailLines(Number(e.target.value))}
+              className="px-2 py-1 rounded-lg text-xs border" style={{ background: '#0d1117', borderColor: '#30363d', color: '#e6edf3' }}
+            >
+              {TAIL_OPTIONS.map(n => <option key={n} value={n}>Last {n} lines</option>)}
+            </select>
+            <button
+              onClick={fetchLogs} disabled={loading}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border"
+              style={{ color: '#8b949e', borderColor: '#30363d', background: 'transparent', cursor: loading ? 'default' : 'pointer' }}
+            >
+              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto p-4" ref={logRef}>
+          {error ? (
+            <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(248,81,73,0.1)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
+              <AlertCircle size={15} />{error}
+            </div>
+          ) : loading ? (
+            <div className="text-center py-16">
+              <div className="inline-block w-5 h-5 rounded-full border-2 animate-spin" style={{ borderColor: '#30363d', borderTopColor: '#f97316' }} />
+            </div>
+          ) : (
+            <pre className="text-xs font-mono whitespace-pre-wrap break-words" style={{ color: '#c9d1d9' }}>
+              {logs || 'No log output.'}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PodsTab({ namespace, name, primary }) {
   const [pods, setPods] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [logsTarget, setLogsTarget] = useState(null)
 
   useEffect(() => {
     fetch(`/api/instances/${namespace}/${name}/pods`)
@@ -767,7 +930,7 @@ function PodsTab({ namespace, name, primary }) {
       <table className="w-full">
         <thead>
           <tr style={{ borderBottom: '1px solid #21262d' }}>
-            {['Pod', 'Role', 'Phase', 'Ready', 'Restarts', 'Pod IP', 'Node', 'Age'].map(h => (
+            {['Pod', 'Role', 'Phase', 'Ready', 'Restarts', 'Pod IP', 'Node', 'Age', ''].map(h => (
               <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: '#8b949e' }}>{h}</th>
             ))}
           </tr>
@@ -795,10 +958,24 @@ function PodsTab({ namespace, name, primary }) {
               <td className="px-4 py-3 text-xs font-mono" style={{ color: '#8b949e' }}>{pod.podIP}</td>
               <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{pod.node}</td>
               <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{pod.age}</td>
+              <td className="px-4 py-3 text-right">
+                <button
+                  onClick={() => setLogsTarget(pod)}
+                  className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border ml-auto"
+                  style={{ color: '#8b949e', borderColor: '#30363d', background: 'transparent', cursor: 'pointer' }}
+                >
+                  <Icons.ScrollText size={12} />
+                  Logs
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      {logsTarget && (
+        <LogsModal namespace={namespace} name={name} pod={logsTarget} onClose={() => setLogsTarget(null)} />
+      )}
     </div>
   )
 }
@@ -901,9 +1078,121 @@ function GaleraTopologyDiagram({ namespace, name, detail }) {
   )
 }
 
+// On-demand (not auto-refreshed) schema/version consistency check across every pod of this
+// instance — each pod needs its own `kubectl exec` round trip, unlike the rest of this API
+// which reads cheaply from the k8s API server, so this only runs when asked. Structural
+// comparison only (table/column names+types via information_schema, hashed), not row data.
+function SchemaConsistencyCheck({ namespace, name }) {
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  const runCheck = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/instances/${namespace}/${name}/schema-check`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setResult(data)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const reference = result?.pods.find(p => p.pod === result.referencePod)
+
+  return (
+    <div className="rounded-xl border p-5" style={{ background: '#161b22', borderColor: '#21262d' }}>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <Icons.GitCompare size={16} color="#bc8cff" />
+          <h3 className="text-base font-semibold" style={{ color: '#e6edf3' }}>Schema Consistency</h3>
+        </div>
+        <button
+          onClick={runCheck} disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+          style={{
+            background: 'rgba(188,140,255,0.12)', color: '#bc8cff', border: '1px solid rgba(188,140,255,0.35)',
+            cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1,
+          }}
+        >
+          {loading ? <Loader2 size={13} className="animate-spin" /> : <Icons.GitCompare size={13} />}
+          {loading ? 'Checking…' : (result ? 'Check again' : 'Check now')}
+        </button>
+      </div>
+      <p className="text-xs mb-3" style={{ color: '#8b949e' }}>
+        Runs an information_schema query on every pod (via kubectl exec) to verify they report the same MariaDB version and
+        an identical table/column structure. Compares schema shape, not row data.
+      </p>
+
+      {error && (
+        <div className="flex items-center gap-2 p-2.5 rounded-lg mb-3 text-xs" style={{ background: 'rgba(248,81,73,0.1)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
+          <AlertCircle size={13} />{error}
+        </div>
+      )}
+
+      {result && result.pods.length > 0 && (
+        <>
+          <div className="flex items-center gap-4 mb-3">
+            <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: result.schemaConsistent ? '#3fb950' : '#f85149' }}>
+              {result.schemaConsistent ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+              Schema {result.schemaConsistent ? 'consistent' : 'DIVERGED'}
+            </span>
+            <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: result.versionConsistent ? '#3fb950' : '#d29922' }}>
+              {result.versionConsistent ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+              Version {result.versionConsistent ? 'consistent' : 'mismatched'}
+            </span>
+          </div>
+          <div className="rounded-lg border overflow-x-auto" style={{ borderColor: '#21262d' }}>
+            <table className="w-full">
+              <thead>
+                <tr style={{ borderBottom: '1px solid #21262d' }}>
+                  {['Pod', 'Version', 'Tables', 'Schema hash', 'Error'].map(h => (
+                    <th key={h} className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider whitespace-nowrap" style={{ color: '#8b949e' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.pods.map((p, i) => {
+                  const schemaMatch = !p.error && p.schemaHash === reference?.schemaHash
+                  const versionMatch = !p.error && p.version === reference?.version
+                  return (
+                    <tr key={p.pod} style={{ borderBottom: i < result.pods.length - 1 ? '1px solid #21262d' : 'none' }}>
+                      <td className="px-3 py-2 text-xs font-mono whitespace-nowrap" style={{ color: '#e6edf3' }}>
+                        {p.pod}
+                        {p.pod === result.referencePod && <span className="ml-1.5 text-[9px]" style={{ color: '#8b949e' }}>(reference)</span>}
+                      </td>
+                      <td className="px-3 py-2 text-xs font-mono whitespace-nowrap" style={{ color: p.error ? '#8b949e' : versionMatch ? '#e6edf3' : '#d29922' }}>
+                        {p.version ?? '—'}
+                      </td>
+                      <td className="px-3 py-2 text-xs font-mono" style={{ color: '#8b949e' }}>{p.tableCount ?? '—'}</td>
+                      <td className="px-3 py-2 text-xs font-mono whitespace-nowrap" style={{ color: p.error ? '#8b949e' : schemaMatch ? '#3fb950' : '#f85149' }} title={p.schemaHash ?? ''}>
+                        {p.schemaHash ? p.schemaHash.slice(0, 12) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-xs" style={{ color: '#f85149' }}>{p.error || ''}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ReplicationTab({ namespace, name, detail }) {
   if (detail.type === 'Galera') {
-    return <GaleraTopologyDiagram namespace={namespace} name={name} detail={detail} />
+    return (
+      <div className="space-y-4">
+        <GaleraTopologyDiagram namespace={namespace} name={name} detail={detail} />
+        <SchemaConsistencyCheck namespace={namespace} name={name} />
+      </div>
+    )
   }
 
   const replicas = detail.replication?.replicas ?? {}
@@ -918,6 +1207,7 @@ function ReplicationTab({ namespace, name, detail }) {
   return (
     <div className="space-y-4">
       <ReplicationTopologyDiagram detail={detail} />
+      <SchemaConsistencyCheck namespace={namespace} name={name} />
 
       {/* Role summary */}
       <div className="flex gap-3">
@@ -1002,7 +1292,7 @@ function ServicesTab({ namespace, name }) {
       <table className="w-full">
         <thead>
           <tr style={{ borderBottom: '1px solid #21262d' }}>
-            {['Service', 'Role', 'Type', 'Cluster IP', 'Ports'].map(h => (
+            {['Service', 'Role', 'Type', 'Cluster IP', 'Ports', 'Endpoints'].map(h => (
               <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: '#8b949e' }}>{h}</th>
             ))}
           </tr>
@@ -1034,6 +1324,20 @@ function ServicesTab({ namespace, name }) {
                   ))}
                 </div>
               </td>
+              <td className="px-4 py-3">
+                {(() => {
+                  const { endpointsReady: ready, endpointsTotal: total } = svc
+                  // 0/0 (no backends registered at all, e.g. a fresh -primary Service before
+                  // the operator has pointed it anywhere yet) reads differently from N/0 out
+                  // of M expected — the latter means something's actually down.
+                  const color = total === 0 ? '#8b949e' : ready === total ? '#3fb950' : ready === 0 ? '#f85149' : '#d29922'
+                  return (
+                    <span className="text-xs font-mono px-2 py-0.5 rounded-full" style={{ background: color + '22', color }}>
+                      {ready}/{total} ready
+                    </span>
+                  )
+                })()}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -1046,7 +1350,7 @@ function TLSTab({ tls, tlsEnabled }) {
   if (!tlsEnabled || !tls) {
     return (
       <div className="rounded-xl border p-8 text-center" style={{ background: '#161b22', borderColor: '#21262d' }}>
-        <Shield size={28} className="mx-auto mb-2" style={{ color: '#30363d' }} />
+        <Shield size={24} className="mx-auto mb-2" style={{ color: '#30363d' }} />
         <p className="text-sm" style={{ color: '#8b949e' }}>TLS is not enabled for this instance.</p>
       </div>
     )
@@ -1568,7 +1872,7 @@ export default function InstanceDetail({ instanceKey, setPage }) {
   useEffect(() => { fetchDetail() }, [fetchDetail])
 
   return (
-    <div className="px-8 py-8 max-w-5xl mx-auto">
+    <div className="px-8 py-8 max-w-[1800px] mx-auto">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 mb-6 text-sm" style={{ color: '#8b949e' }}>
         <button onClick={() => setPage('dashboard')}
@@ -1599,9 +1903,16 @@ export default function InstanceDetail({ instanceKey, setPage }) {
                 onMouseLeave={e => e.currentTarget.style.borderColor = '#30363d'}>
                 <ArrowLeft size={15} />
               </button>
+              {/* Page-title icon, same blue/treatment as the Instances table links on the
+                  Dashboard — a modestly larger, bolder icon than the 11-15px ones used
+                  everywhere else, marking this as the page's identity rather than a detail. */}
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+                style={{ background: 'rgba(88,166,255,0.12)', borderColor: 'rgba(88,166,255,0.3)' }}>
+                <Database size={20} color="#58a6ff" strokeWidth={2.25} />
+              </div>
               <div>
                 <div className="flex items-center gap-3 mb-1">
-                  <h1 className="text-lg font-semibold" style={{ color: '#e6edf3' }}>{name}</h1>
+                  <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>{name}</h1>
                   <StatusBadge status={detail.status} small />
                   <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(249,115,22,0.12)', color: '#f97316', border: '1px solid rgba(249,115,22,0.3)' }}>
                     {detail.type}

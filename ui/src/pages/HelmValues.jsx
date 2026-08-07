@@ -106,9 +106,9 @@ function Section({ icon: Icon, title, accent = '#8b949e', defaultOpen = false, c
         onMouseEnter={e => { if (!open) e.currentTarget.style.background = '#1c2330' }}
         onMouseLeave={e => { if (!open) e.currentTarget.style.background = '#161b22' }}>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: accent + '22' }}>
-          <Icon size={14} color={accent} />
+          <Icon size={16} color={accent} />
         </div>
-        <span className="text-sm font-semibold flex-1" style={{ color: '#e6edf3' }}>{title}</span>
+        <span className="text-base font-semibold flex-1" style={{ color: '#e6edf3' }}>{title}</span>
         {badge && <span className="text-xs px-2 py-0.5 rounded-full mr-2" style={{ background: 'rgba(249,115,22,0.15)', color: '#f97316' }}>{badge}</span>}
         {open ? <ChevronDown size={14} style={{ color: '#8b949e' }} /> : <ChevronRight size={14} style={{ color: '#8b949e' }} />}
       </button>
@@ -245,7 +245,7 @@ export default function HelmValues() {
 
   if (loading) return (
     <div className="flex items-center justify-center gap-2 py-24" style={{ color: '#8b949e' }}>
-      <Loader2 size={18} className="animate-spin" /><span className="text-sm">Loading Helm values…</span>
+      <Loader2 size={16} className="animate-spin" /><span className="text-sm">Loading Helm values…</span>
     </div>
   )
   if (error) return (
@@ -264,7 +264,7 @@ export default function HelmValues() {
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Operator Settings</h1>
+          <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Operator Settings</h1>
           <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>
             Advanced Helm chart values for <span className="font-mono" style={{ color: '#e6edf3' }}>mariadb-operator</span>
           </p>
@@ -277,7 +277,7 @@ export default function HelmValues() {
           <button onClick={apply} disabled={applying}
             className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all"
             style={{ background: applying ? '#30363d' : 'linear-gradient(135deg,#f97316,#ea580c)', color: applying ? '#8b949e' : 'white', boxShadow: applying ? 'none' : '0 0 16px rgba(249,115,22,0.2)', cursor: applying ? 'not-allowed' : 'pointer' }}>
-            {applying ? <><Loader2 size={14} className="animate-spin" />Applying…</> : <><Zap size={14} />Apply Changes</>}
+            {applying ? <><Loader2 size={13} className="animate-spin" />Applying…</> : <><Zap size={13} />Apply Changes</>}
           </button>
         </div>
       </div>

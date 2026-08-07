@@ -11,6 +11,95 @@ const execAsync = promisify(exec)
 const app = express()
 app.use(express.json())
 
+// ── UI action log ────────────────────────────────────────────────────────────
+//
+// Local record of mutating requests this UI has actually sent (deploys, deletes,
+// switchovers, chaos drills, CRD create/delete, ...) — not to be confused with
+// GET /api/events, which shows Kubernetes' own Events for objects the *operator*
+// touched. Added after a real incident: an instance disappeared and it took a while to
+// work out someone had just clicked "Delete instance" in this UI, because that DELETE
+// call leaves no trace of its own (see Ui.md, "my-mariadb-1 消失了"). This UI has no
+// login/identity system, so entries can't say *who* — only *what* and *when*, which is
+// still enough to answer "did someone actually do this, and when" during a postmortem.
+//
+// Kept as a capped in-memory ring buffer plus a best-effort append-only file so recent
+// history survives a `node server.js` restart (this file has no HMR, see Ui.md's own
+// noted limitation, so restarts happen often during dev).
+const ACTION_LOG_LIMIT = 200
+const ACTION_LOG_PATH = process.env.ACTION_LOG_PATH || '/tmp/mariadb-ui-actions.jsonl'
+let actionLog = []
+try {
+  actionLog = fs.readFileSync(ACTION_LOG_PATH, 'utf8')
+    .split('\n').filter(Boolean).map(l => JSON.parse(l)).slice(-ACTION_LOG_LIMIT)
+} catch {
+  // No log file yet (first run) — start empty.
+}
+
+function recordAction(entry) {
+  actionLog.push(entry)
+  if (actionLog.length > ACTION_LOG_LIMIT) actionLog = actionLog.slice(-ACTION_LOG_LIMIT)
+  try {
+    fs.appendFileSync(ACTION_LOG_PATH, JSON.stringify(entry) + '\n')
+  } catch (err) {
+    console.error('Failed to persist UI action log entry:', err.message)
+  }
+}
+
+// Turns (method, path, body) into a one-line human summary. Falls through to a generic
+// "METHOD /path" line for anything not explicitly matched, so a new mutating route added
+// later still shows up in the log even before someone gets around to describing it here.
+function describeAction(method, urlPath, body) {
+  const seg = urlPath.split('?')[0].split('/').filter(Boolean) // ['api', 'instances', 'test1', 'test-db-1', ...]
+  const b = body || {}
+
+  if (method === 'POST' && urlPath === '/api/deploy') return `Deployed new instance ${b.namespace}/${b.name}`
+  if (method === 'POST' && urlPath === '/api/helm/upgrade') return 'Applied Helm upgrade to the operator release'
+  if (method === 'POST' && urlPath === '/api/secrets') return `Created Secret "${b.name}" in ${b.namespace}`
+
+  if (seg[0] === 'api' && seg[1] === 'crd') {
+    const kind = seg[2]
+    if (method === 'POST') return `Created ${kind} "${b.name}" in ${b.namespace}`
+    if (method === 'DELETE') return `Deleted ${kind} "${seg[4]}" from ${seg[3]}`
+  }
+
+  if (seg[0] === 'api' && seg[1] === 'instances' && seg.length >= 4) {
+    const ns = seg[2], name = seg[3], sub = seg[4]
+    if (!sub && method === 'DELETE') return `Deleted instance ${ns}/${name}`
+    if (sub === 'chaos' && seg[5] === 'delete-pod') return `Chaos drill: deleted pod "${b.podName}" in ${ns}/${name}`
+    if (sub === 'restore-drill' && method === 'POST') return `Started restore drill on ${ns}/${name} from backup "${b.backupName}"`
+    if (sub === 'restore-drill' && method === 'DELETE') return `Cleaned up restore drill on ${ns}/${name}`
+    if (sub === 'image') return `Changed image on ${ns}/${name} to "${b.image}"`
+    if (sub === 'storage-size') return `Resized storage on ${ns}/${name} to ${b.size}`
+    if (sub === 'storage-class') return `Changed storage class on ${ns}/${name} to "${b.storageClassName}"`
+    if (sub === 'service-type') return `Changed service type on ${ns}/${name} to ${b.serviceType}`
+    if (sub === 'replicas') return `Scaled ${ns}/${name} to ${b.replicas} replicas`
+    if (sub === 'switchover') return `Triggered switchover on ${ns}/${name} to pod index ${b.podIndex}`
+    if (sub === 'resources') return `Updated resource requests/limits on ${ns}/${name}`
+  }
+
+  return `${method} ${urlPath}`
+}
+
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.path === '/api/activity/log') return next()
+  const startedAt = Date.now()
+  res.on('finish', () => {
+    recordAction({
+      time: new Date(startedAt).toISOString(),
+      method: req.method,
+      path: req.path,
+      summary: describeAction(req.method, req.path, req.body),
+      status: res.statusCode,
+      ok: res.statusCode < 400,
+    })
+  })
+  next()
+})
+
+app.get('/api/activity/log', (req, res) => {
+  res.json({ actions: [...actionLog].reverse() })
+})
+
 // Helm release managed by this UI — configurable so the same image works
 // regardless of which namespace the operator chart is installed into.
 const HELM_RELEASE_NAME = process.env.HELM_RELEASE_NAME || 'mariadb-operator'
@@ -687,6 +776,25 @@ app.post('/api/deploy', async (req, res) => {
   }
 })
 
+// Whether the mysqld-exporter Deployment for this instance is actually up, not just
+// requested. spec.metrics.enabled=true isn't enough on its own — the operator's
+// reconcileMetrics() bails out before ever creating the exporter Deployment if the
+// ServiceMonitor CRD (from Prometheus Operator) isn't installed in the cluster, logging
+// only a Warning Event that's easy to miss. Found by hitting this exact trap: Config
+// Health showed "Monitoring connected" from spec alone while no exporter pod existed.
+async function isMetricsExporterReady(namespace, name) {
+  try {
+    const { stdout } = await execFileAsync('kubectl', [
+      'get', 'deployment', `${name}-metrics`, '-n', namespace, '--ignore-not-found', '-o', 'json',
+    ])
+    if (!stdout.trim()) return false
+    const dep = JSON.parse(stdout)
+    return (dep.status?.readyReplicas ?? 0) >= 1
+  } catch {
+    return false
+  }
+}
+
 // Get single instance detail
 app.get('/api/instances/:namespace/:name', async (req, res) => {
   const { namespace, name } = req.params
@@ -696,6 +804,7 @@ app.get('/api/instances/:namespace/:name', async (req, res) => {
     const meta = item.metadata
     const spec = item.spec
     const status = item.status || {}
+    const metricsReady = spec.metrics?.enabled ? await isMetricsExporterReady(namespace, name) : false
 
     const topology = spec.replication?.enabled ? 'Replication'
       : spec.galera?.enabled ? 'Galera' : 'Standalone'
@@ -734,6 +843,7 @@ app.get('/api/instances/:namespace/:name', async (req, res) => {
       tls: status.tls ?? null,
       tlsEnabled: spec.tls?.enabled ?? false,
       metricsEnabled: spec.metrics?.enabled ?? false,
+      metricsReady,
       pmmEnabled: (spec.sidecarContainers ?? []).some(c => c.name === 'pmm-client'),
       pmmServerAddress: (spec.sidecarContainers ?? [])
         .find(c => c.name === 'pmm-client')?.env
@@ -798,6 +908,116 @@ app.get('/api/instances/:namespace/:name/pods', async (req, res) => {
       }
     })
     res.json({ pods: result })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Logs for a single container in a pod belonging to this instance. Scoped to
+// `app.kubernetes.io/instance=<name>` pods only, same guard as the chaos delete-pod route
+// — podName/container can't be used to read logs from anything outside this instance.
+// Capped tailLines (default 200, max 2000) since this is meant for "what's going on right
+// now", not a full-history log export, and to keep the response size sane.
+app.get('/api/instances/:namespace/:name/pods/:podName/logs', async (req, res) => {
+  const { namespace, name, podName } = req.params
+  const container = req.query.container
+  const tailLines = Math.min(Math.max(Number(req.query.tailLines) || 200, 1), 2000)
+  if (!container) return res.status(400).json({ error: 'container query param is required' })
+  try {
+    const { stdout } = await execFileAsync('kubectl', [
+      'get', 'pods', '-n', namespace, '-l', `app.kubernetes.io/instance=${name}`, '-o', 'jsonpath={.items[*].metadata.name}',
+    ])
+    const validPods = stdout.trim().split(/\s+/).filter(Boolean)
+    if (!validPods.includes(podName)) {
+      return res.status(400).json({ error: `${podName} is not a pod of instance ${name}` })
+    }
+    const { stdout: logs } = await execFileAsync('kubectl', [
+      'logs', podName, '-n', namespace, '-c', container, '--tail', String(tailLines), '--timestamps',
+    ], { maxBuffer: 10 * 1024 * 1024 })
+    res.json({ logs })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Fetches and base64-decodes a single key out of a k8s Secret.
+async function getSecretValue(namespace, secretName, key) {
+  const { stdout } = await execFileAsync('kubectl', [
+    'get', 'secret', secretName, '-n', namespace, '-o', `jsonpath={.data.${key}}`,
+  ])
+  return Buffer.from(stdout.trim(), 'base64').toString('utf8')
+}
+
+// Structural (not data) schema fingerprint: one row of table_schema.table_name:col-type
+// per table, concatenated and hashed, so two pods with identical schemas produce the same
+// MD5 regardless of table order. System schemas are excluded since those are expected to
+// differ from operator/MariaDB-version internals, not app schema drift.
+const SCHEMA_HASH_SQL = `SELECT MD5(GROUP_CONCAT(sig ORDER BY sig SEPARATOR '|')) AS h, COUNT(*) AS c FROM ` +
+  `(SELECT CONCAT(table_schema,'.',table_name,':',COALESCE(GROUP_CONCAT(column_name,'-',column_type ORDER BY ordinal_position SEPARATOR ','),'')) AS sig ` +
+  `FROM information_schema.columns WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys') ` +
+  `GROUP BY table_schema, table_name) t;`
+
+// Schema consistency check (Replication tab widget): verifies every running pod reports the
+// same MariaDB version and the same schema-structure hash — same idea as VTAdmin's schema
+// tracking. Run on-demand (not auto-refreshed) since each pod needs its own `kubectl exec`
+// round trip (~1s+), unlike the rest of this API which reads cheaply from the k8s API server.
+app.get('/api/instances/:namespace/:name/schema-check', async (req, res) => {
+  const { namespace, name } = req.params
+  try {
+    const { stdout: crOut } = await execFileAsync('kubectl', ['get', 'mariadb', name, '-n', namespace, '-o', 'json'])
+    const cr = JSON.parse(crOut)
+    const rootRef = cr.spec?.rootPasswordSecretKeyRef
+    if (!rootRef?.name || !rootRef?.key) {
+      return res.status(500).json({ error: 'Could not resolve spec.rootPasswordSecretKeyRef on this instance.' })
+    }
+    const rootPassword = await getSecretValue(namespace, rootRef.name, rootRef.key)
+
+    const { stdout: podsOut } = await execFileAsync('kubectl', [
+      'get', 'pods', '-n', namespace, '-l', `app.kubernetes.io/instance=${name}`, '-o', 'json',
+    ])
+    const pods = JSON.parse(podsOut).items
+      .filter(p => p.status?.phase === 'Running')
+      .map(p => p.metadata.name)
+      .sort()
+
+    if (pods.length === 0) {
+      return res.json({ pods: [], schemaConsistent: true, versionConsistent: true, referencePod: null })
+    }
+
+    async function checkPod(pod) {
+      try {
+        const [versionRes, hashRes] = await Promise.all([
+          execFileAsync('kubectl', [
+            'exec', pod, '-n', namespace, '-c', 'mariadb', '--',
+            'mariadb', '-uroot', `-p${rootPassword}`, '-N', '-B', '-e', 'SELECT VERSION();',
+          ], { timeout: 15000 }),
+          execFileAsync('kubectl', [
+            'exec', pod, '-n', namespace, '-c', 'mariadb', '--',
+            'mariadb', '-uroot', `-p${rootPassword}`, '-N', '-B', '-e', SCHEMA_HASH_SQL,
+          ], { timeout: 15000 }),
+        ])
+        const version = versionRes.stdout.trim()
+        const [hash, count] = hashRes.stdout.trim().split('\t')
+        return { pod, version, schemaHash: hash === 'NULL' ? null : hash, tableCount: Number(count) || 0, error: null }
+      } catch (err) {
+        // Trim to the first line — kubectl/mariadb-client errors can be multi-line and the
+        // rest is rarely useful in a one-line-per-pod UI table.
+        return { pod, version: null, schemaHash: null, tableCount: null, error: err.message.split('\n')[0] }
+      }
+    }
+
+    const results = await Promise.all(pods.map(checkPod))
+    const ok = results.filter(r => !r.error)
+    const referencePod = ok[0]?.pod ?? null
+    const referenceHash = ok[0]?.schemaHash ?? null
+    const referenceVersion = ok[0]?.version ?? null
+
+    res.json({
+      pods: results,
+      referencePod,
+      schemaConsistent: ok.every(r => r.schemaHash === referenceHash),
+      versionConsistent: ok.every(r => r.version === referenceVersion),
+    })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -920,21 +1140,37 @@ app.delete('/api/instances/:namespace/:name/restore-drill', async (req, res) => 
 app.get('/api/instances/:namespace/:name/services', async (req, res) => {
   const { namespace, name } = req.params
   try {
-    const { stdout } = await execAsync(
-      `kubectl get svc -n ${namespace} -o json`
-    )
-    const all = JSON.parse(stdout).items
+    const [svcOut, sliceOut] = await Promise.all([
+      execAsync(`kubectl get svc -n ${namespace} -o json`),
+      // EndpointSlice, not the legacy v1 Endpoints API (deprecated since k8s 1.33) — some of
+      // this operator's Services (e.g. "<name>-secondary") are selector-less and have their
+      // EndpointSlice hand-managed by the operator itself instead of the built-in k8s
+      // endpoint-slice-controller, so `kubectl get endpoints` would show nothing for them
+      // even though they're correctly routing traffic. Found by hitting exactly this
+      // confusion while debugging live: an operator-managed EndpointSlice existed and was
+      // fully populated, but the legacy Endpoints object for that Service didn't.
+      execAsync(`kubectl get endpointslices -n ${namespace} -o json`),
+    ])
+    const all = JSON.parse(svcOut.stdout).items
     const svcs = all.filter(s =>
       s.metadata.name === name ||
       s.metadata.name.startsWith(`${name}-`)
     ).filter(s => s.metadata.name !== `${name}-internal` || true)
 
-    const result = svcs.map(s => ({
-      name: s.metadata.name,
-      type: s.spec.type,
-      clusterIP: s.spec.clusterIP ?? '—',
-      ports: s.spec.ports.map(p => ({ port: p.port, protocol: p.protocol, name: p.name })),
-    }))
+    const slices = JSON.parse(sliceOut.stdout).items
+
+    const result = svcs.map(s => {
+      const matching = slices.filter(sl => sl.metadata.labels?.['kubernetes.io/service-name'] === s.metadata.name)
+      const endpoints = matching.flatMap(sl => sl.endpoints ?? [])
+      return {
+        name: s.metadata.name,
+        type: s.spec.type,
+        clusterIP: s.spec.clusterIP ?? '—',
+        ports: s.spec.ports.map(p => ({ port: p.port, protocol: p.protocol, name: p.name })),
+        endpointsTotal: endpoints.length,
+        endpointsReady: endpoints.filter(e => e.conditions?.ready !== false).length,
+      }
+    })
     res.json({ services: result })
   } catch (err) {
     res.status(500).json({ error: err.message })

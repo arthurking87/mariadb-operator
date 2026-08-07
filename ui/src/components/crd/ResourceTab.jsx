@@ -151,7 +151,7 @@ export default function ResourceTab({ schema, namespace, instanceName }) {
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium"
                 style={{ background: '#f85149', color: 'white', opacity: deleting ? 0.7 : 1 }}
               >
-                {deleting && <Loader2 size={14} className="animate-spin" />}
+                {deleting && <Loader2 size={13} className="animate-spin" />}
                 Delete
               </button>
               <button

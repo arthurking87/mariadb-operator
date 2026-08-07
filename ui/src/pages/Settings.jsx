@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Save, RotateCcw, CheckCircle2, Server, AlertCircle } from 'lucide-react'
+import { Save, RotateCcw, CheckCircle2, Server, AlertCircle, Settings as SettingsIcon } from 'lucide-react'
 import { getSettings, setSettings, resetSettings, DEFAULT_SETTINGS } from '../lib/settings'
 
 function Field({ label, hint, children }) {
@@ -48,11 +48,19 @@ export default function Settings() {
   return (
     <div className="px-8 py-8 max-w-2xl mx-auto">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Settings</h1>
-        <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>
-          Preferences for this UI only — stored in your browser, not on the cluster.
-        </p>
+      <div className="mb-8 flex items-center gap-3.5">
+        {/* Page-title badge, same treatment as the core pages — deliberately neutral gray,
+            like Docs, since this is a secondary preferences page rather than a core workflow. */}
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+          style={{ background: 'rgba(139,148,158,0.12)', borderColor: 'rgba(139,148,158,0.3)' }}>
+          <SettingsIcon size={20} color="#8b949e" strokeWidth={2.25} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Settings</h1>
+          <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>
+            Preferences for this UI only — stored in your browser, not on the cluster.
+          </p>
+        </div>
       </div>
 
       <div className="rounded-xl border p-6 mb-5" style={{ background: '#161b22', borderColor: '#21262d' }}>
@@ -122,7 +130,7 @@ export default function Settings() {
             <Server size={16} color="#58a6ff" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>Connection</h2>
+            <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>Connection</h2>
             <p className="text-xs" style={{ color: '#8b949e' }}>What this UI is connected to — read-only.</p>
           </div>
         </div>

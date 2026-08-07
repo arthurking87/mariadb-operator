@@ -187,7 +187,7 @@ export default function CreateResourceModal({ schema, namespace, instanceName, o
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>{title || `New ${schema.label}`}</h2>
           <button onClick={onClose} style={{ color: '#8b949e', background: 'none', border: 'none', cursor: 'pointer' }}>
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
 
@@ -210,7 +210,7 @@ export default function CreateResourceModal({ schema, namespace, instanceName, o
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium"
             style={{ background: 'linear-gradient(135deg,#f97316,#ea580c)', color: 'white', opacity: submitting ? 0.7 : 1 }}
           >
-            {submitting && <Loader2 size={14} className="animate-spin" />}
+            {submitting && <Loader2 size={13} className="animate-spin" />}
             Create
           </button>
           <button

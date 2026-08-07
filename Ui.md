@@ -3,7 +3,154 @@
 > 產生日期：2026-08-05。記錄 `ui/` 這個 React + Express 小面板的現況、異動決策，以及尚未實作項目的規劃討論。
 > 面板結構：`ui/src/App.jsx`（路由）+ `ui/src/components/Sidebar.jsx`（左側導覽）+ `ui/src/pages/*.jsx`（各頁）+ `ui/server.js`（Express API，包在同一個容器內用 `kubectl`/`helm` 操作叢集）。
 
-## 新增 Backups 頁面（跨 instance 備份/還原總覽）+ Dashboard 加上備份排程指示（2026-08-06）
+## 視覺美化：用 agent 當「UI 美術家」、我當設計師互動執行（2026-08-07）
+
+你要求開一個 agent 當 UI 美術家、我當設計師跟它互動修改 UI。流程：我先自己截了 Dashboard/Overview/Replication 三個現況畫面當「設計師審視現況」，抓出具體批評（不是憑空講「要更好看」）——整個 app 每個區塊都用同一種深色卡片＋細邊框，缺乏層次；橘色 `#f97316` 是唯一在做「這是重要/可互動」訊號的顏色；`crdSchemas.js` 裡每個 CRD 其實早就定義了自己的 `accent` 色（Database 藍、User 綠、Grant 紫、Backup 橘...），但幾乎沒被用到 CRD 分頁小圖示以外的地方；Config Health 清單裡失敗項目只靠圖示顏色差異提示，掃視不夠快。
+
+**開 agent 的方式**：用 `isolation: worktree` 讓它在獨立的 git worktree 裡工作，不會動到我正在跑的 dev server / 正在測試的畫面。給它的 prompt 明確列出現有的色彩系統（每個 hex 值、既有的 class/style pattern）、上述五點批評、以及「這是純視覺 polish，不能動路由/資料邏輯/新增套件，改完要 `vite build` 過、不能新增超出既有基準線的 lint 問題、要截圖驗證」的限制——刻意不給它逐一像素級的指令，而是給批評+方向，讓它自己判斷怎麼執行，比較接近真的請一個美術家做事，不是我自己動手只是換個人打字。
+
+**agent 的產出**（`Dashboard.jsx`/`Backups.jsx`/`InstanceDetail.jsx` 三個檔案）：
+1. Dashboard/Backups 的統計卡片改成「抬升表面色」`#1a2028`（相對於全站標準的 `#161b22`）+ 左側 3px accent 色條 + 角落極淡的放射狀色暈，四張卡片依各自意義（Total Instances 藍、Running 綠、Total Replicas 橘、Namespaces 紫）變得一眼可辨，不再是四個一模一樣的灰盒子。
+2. Config Health 清單：失敗的那一行現在整行帶琥珀色調底色＋左側 2px 色條＋文字加粗變亮，通過的行反而收斂成灰色文字——不用逐行讀就能一眼抓到問題在哪。
+3. CRDs 分頁的 kind 選單（Databases/Users/Grants/...）：選中的分頁現在會亮成**那個 CRD 自己的** accent 色（User 綠、Grant 紫...），不是每個都亮橘色——這是「既有色彩系統幾乎沒被用到」這條批評最直接的落地案例，色彩本來就在 `crdSchemas.js` 裡定義好了，只是沒被接上。
+4. 每個頁面標題旁加了一個比行內圖示（12-15px）明顯更大更粗的 20px 圖示徽章，給頁面一個視覺錨點。
+5. `Backups.jsx` 的統計卡片同時支援 `tone`（danger/warn/ok 警示色）跟 `accent`（CRD 身份色）兩種著色依據，**tone 優先**——這樣「No schedule」這種警示數字還是會正確顯示警示色，不會被身份色蓋掉，語意判斷是對的，不是機械套用同一套規則。
+
+**我（設計師）審查**：沒有直接信任 agent 的文字總結，實際打開它附的 before/after 截圖逐張看過，也讀了三個檔案的實際 diff（不是重新讀整份檔案，只看變更片段）確認程式碼品質——註解清楚交代「為什麼」而非「做了什麼」，跟這個 repo 一路以來的慣例一致；色彩選擇全部複用既有系統的值，沒有發明新顏色；`tone` 優先於 `accent` 這種語意判斷也做對了。滿意後才把三個檔案從它的 worktree複製回主要工作目錄。
+
+**驗證**（在我自己的工作目錄，接真的 KIND 叢集資料，不只信任 agent 自己在 worktree 裡的驗證）：`vite build` 過；三個檔案的 eslint 輸出跟這次改動前的基準線逐項比對，沒有新增任何問題；headless Chrome 對著真實 `test1/test-db-1` 重新截圖，確認 Config Health 失敗行的視覺效果、CRDs 分頁的 accent 色切換都在真實資料下正確顯示，console 全程無錯誤。完成後刪除 agent 用過的 worktree 跟對應分支，不留殘留物。
+
+## 視覺美化 Round 2：字級/圖示分級系統化 + 剩餘頁面補齊（2026-08-07）
+
+你問「所有頁面都依照這樣來修改一遍，我覺得字體大小跟一些 icon 是否都有更好選擇？」——上一輪只動了 Dashboard/Backups/InstanceDetail 三個檔案，這輪要求擴散到全站，並且specifically 重新檢視字級跟圖示尺寸有沒有更好的規則，不是只憑感覺調。
+
+**先自己做設計稽核，量化問題**（不是憑印象講「字太小」）：
+- 全站 `text-xs`/`text-sm`/`text-base`/`text-lg`/`text-xl`/`text-2xl`/`text-3xl` 用量：`257 text-xs, 172 text-sm, 9 text-xl, 8 text-base, 4 text-2xl, 2 text-lg`——452 處裡 429 處（95%）擠在 xs/sm 兩級，頁面標題、區塊標題、內文全部同一個尺寸級距，區塊標題（如「Config Health」）跟內文的唯一差異只有 `font-semibold`，字級本身沒有拉開層次。
+- 圖示 `size=` 用量：`4×10, 26×11, 21×12, 45×13, 43×14, 24×15, 9×16, 6×18, 1×19, 7×20, 6×24, 1×28, 1×32`——13 種不同像素值同時存在，沒有明確分級。
+
+**定出的規則**（作為這輪套用的基準，不是每一處機械套用，允許有理由的例外）：
+- 字級：頁面標題 `text-xl`→`text-2xl`；區塊標題（表格/卡片群組上方那種 `<h2>`）`text-sm font-semibold`→`text-base font-semibold`；內文/表單/說明文字維持 `text-sm`；密集資料（表格內文、badge、時間戳）維持 `text-xs` 不動——這個級距本來就適合表格密度。
+- 圖示：頁面標題徽章 `20px`（沿用 round 1 已經定的值）；區塊標題圖示統一收斂到 `16px`（round 1 混用了 15/16，這輪統一）；行內/表格列圖示收斂到 `13px`；小型 badge/chip 內圖示收斂到 `11-12px`；空狀態大圖示自成一級，收斂到 `24px`（原本 28/32 的離群值往下收，不強迫變得跟行內圖示一樣小）。
+
+**執行方式**：跟 round 1 一樣開 `isolation: worktree` 的 agent，這次 prompt 除了上面兩條規則，還列了尚未套用 round 1 視覺語言的頁面清單（Capacity/Switchover/Activity/Docs/Settings/CreateMariaDB/StandaloneCrdPage/HelmValues，以及 InstanceDetail 剩下的 Pods/Replication/Services/TLS/Events/Resilience 分頁），要求：區塊標題/圖示套規則、缺頁面標題徽章的頁面補上（顏色從既有調色盤挑一個跟該頁面既有主題色不衝突的，不能發明新 hex）、有「hero 統計列」的頁面（查出 `Capacity.jsx` 確實有）套用 round 1 同一套 raised-surface + accent 色條卡片樣式。
+
+**agent 的產出跟我的判斷**（逐檔讀 diff 確認，不是只看它的文字總結）：
+- 15 個檔案改動，全部乾淨對應上述規則，沒有夾帶功能/路由/資料邏輯改動。
+- 頁面徽章顏色選得有道理：Capacity 用綠色（跟 Dashboard 藍、Backups 橘區隔開）；Switchover 用琥珀色（呼應這頁本來就在用的「switching」狀態色，不是隨便挑一個沒用過的顏色）；Activity 用紫色；Docs/Settings 兩個次要頁面刻意用中性灰徽章，不硬套一個強調色——這個判斷是對的，不是每頁都得五顏六色。
+- Dashboard 的 hero 數字額外從 `text-2xl` 再拉到 `text-3xl`（這是全站唯一的「headline 數字」），agent 有先截圖確認沒有跟四欄網格擠壓才定案，不是盲目套用。
+- 誠實回報了兩個發現：`HelmValues.jsx`、`StandaloneCrdPage.jsx` 這兩個頁面其實**沒有掛在 `App.jsx` 的路由裡**（呼應本文件更早之前「MaxScale/External DBs 移除」「Helm Values 移除」兩次決策——拿掉的是導覽入口，程式碼本來就還在），所以只做了輕量的字級/圖示收斂，沒有幫 `HelmValues.jsx` 加頁面徽章，因為那是個進不去的頁面，加了也沒意義。
+- `CreateMariaDB.jsx`（New Instance 精靈）刻意沒加頁面標題徽章——這頁用的是 breadcrumb + 步驟指示器，agent 判斷硬塞一個徽章會跟步驟指示器搶視覺，只做了字級/圖示收斂，這個克制是對的。
+- 圖示「選擇」（不只是尺寸）審查過一輪，結論是既有選擇（Gauge/Archive/ArrowRightLeft 等）都已經是合理的圖示，沒有做任何圖示替換。
+
+**我的審查**：15 個檔案的 diff 全部逐一讀過（用 `diff` 對 worktree 版本跟主要工作目錄版本，不是重新整份重讀），改動都對應到上面定的規則，沒有夾帶跟本次任務無關的改動；也讀了 19 張截圖，確認實際畫面上字級層次確實比之前清楚（頁面標題跟區塊標題現在一眼可辨），色彩選擇沒有跳脫既有調色盤。
+
+**驗證**（一樣在我自己的工作目錄重跑，不只信任 agent 在 worktree 裡的驗證）：`vite build` 過，零錯誤（唯一警告是既有的 chunk size 過大提示，跟這次改動無關）；`dist/` 本來就在 `.gitignore`，沒有殘留產物。完成後刪除 agent 用過的 worktree 跟對應分支。
+
+## 資料密集頁面改成響應寬螢幕，表單/文字頁面維持原寬度（2026-08-07）
+
+你發現每頁內容大小不會跟著視窗變大變寬——查了確認每一頁最外層容器都是同一套 `px-8 py-8 max-w-Nxl mx-auto` pattern（`Dashboard`/`Backups`/`Capacity`/`Activity` 是 `max-w-6xl`=1152px，`InstanceDetail`/`Switchover` 是 `max-w-5xl`=1024px），在一般筆電螢幕（1400px 左右）看不太出來，但截圖實測 2560px 寬螢幕後，`test-db-1` 的 Pods 分頁右邊真的空出超過一半畫面。
+
+**判斷**：沒有把所有頁面的寬度限制整個拿掉，分兩類處理——
+
+- **表格/資料密集頁面**（Dashboard、InstanceDetail、Backups、Capacity、Activity、Switchover、StandaloneCrdPage）：`max-w-6xl`/`max-w-5xl` 全部改成 `max-w-[1800px]`，這類頁面內容主要是表格/卡片，越寬越好用，尤其這幾輪加了不少新欄位（Services 的 Endpoints、Pods 的 Logs 按鈕、Permissions 矩陣）。
+- **文字/表單類頁面維持原樣不動**：`Docs.jsx`（連結卡片索引，`max-w-6xl` 對這種內容已經夠用）、`Settings.jsx`（`max-w-2xl` 表單）、`CreateMariaDB.jsx`（`max-w-3xl` 精靈表單）、`HelmValues.jsx`（本來就已從導覽移除，不動）——這幾類東西拉滿版反而更難讀/難填，窄一點、置中對齊才好掃視。
+
+`max-w-[1800px]` 而不是完全拿掉上限（無限滿版），是留一個保守的安全帽——避免在真的極端寬螢幕（3440px/5120px 那種 ultrawide）上，表格被拉到誇張寬、欄位之間留一堆詭異的空隙，1800px 已經比原本寬 50%+，多數螢幕下已經算是「填滿可用空間」的效果。
+
+**驗證**：Playwright 開一個真的 2560px 寬視窗（不是只改 CSS 數字就假設有效），改之前 Pods 分頁表格右邊有大片空白，改之後表格正確撐開填滿大部分寬度、欄位間距變寬更好讀；同一支腳本切到 Settings 頁面截圖確認表單維持原本窄版置中、沒有被誤改；另外用 1400px 一般視窗尺寸重新截圖 Dashboard，確認沒有因為這次改動在正常尺寸下跑版（`max-w-[1800px]` 比一般視窗的可用寬度還寬，所以效果等於維持原樣，純粹是在寬螢幕才會有感）。全程 console 無錯誤。
+
+## 側欄改成可拖曳調整寬度 + Backups 分頁改名成 Backups/Restores（2026-08-07）
+
+### 側欄拖曳調整寬度
+
+你問側欄寬度能不能左右調整——原本 `Sidebar.jsx` 只有 collapsed（64px）/ expanded（224px）兩個寫死的狀態，沒有拖曳功能。加了一個 6px 寬的拖曳把手（`aside` 右邊緣，`cursor: col-resize`），只在展開狀態才會出現（收合狀態是固定的純圖示模式，沒有東西好調）。寬度限制在 180～360px（`MIN_WIDTH`/`MAX_WIDTH`），拖出範圍會夾住不會無限變寬/變窄。
+
+**技術細節**：寬度存在獨立的 localStorage key（`mariadb-ui:sidebar-width`），刻意不跟 `src/lib/settings.js` 共用——那個模組的 `getSettings()`/`setSettings()` 每次呼叫都會把整包設定 JSON 序列化一次，適合表單那種偶爾存檔的場景，但拖曳過程中如果每個 `pointermove` 都呼叫一次會很浪費；而且側欄寬度本質上是版面配置狀態，不是 Settings 頁面上會有欄位可以填的「使用者偏好」。只在放開滑鼠（`pointerup`）當下寫入一次，拖曳中只更新 React state 跟畫面。**過程中修掉一個自己寫出來的 bug**：一開始 `onUp` 裡直接讀 closure 裡的 `width` 變數來存檔，因為 `onUp` 是在 `dragging` 這個 effect 觸發時才建立、只綁定 `[dragging]` 這個依賴，所以它 closure 住的 `width` 其實是**拖曳開始那一刻**的舊值，不是放開滑鼠當下的最新寬度——會存到錯的數字。改用一個 `widthRef`，在每次 `pointermove` 時同步更新，`onUp` 改成讀這個 ref 而不是讀 state 變數，避免 stale closure。順便做了拖曳期間鎖定整個 `document.body` 的 cursor/`userSelect`（不只是 6px 把手本身）的標準拖曳把手處理——滑鼠移動太快脫離把手範圍時，避免選取到旁邊的導覽文字。
+
+**驗證**：用 Playwright 模擬真的 `mouse.down` → `mouse.move` → `mouse.up` 拖曳流程（不是只檢查程式碼邏輯）：初始寬度 224px，拖曳 100px 後量到 324px（完全吻合）；重新整理頁面後寬度依然是 324px（確認 localStorage 真的有存到、有讀回來）；刻意拖超過上限 500px，最後量到剛好夾在 360px（`MAX_WIDTH`），沒有無限增長。截圖確認展開變寬後，Logo/導覽項目/Connected 卡片都正常跟著縮放，沒有跑版，全程 console 無錯誤。
+
+**追加修正**：你回報拖曳把手的滑鼠游標圖示顯示成上下箭頭，不是左右——查了確認 CSS `cursor` 屬性真的是 `col-resize`（`getComputedStyle` 查出來就是這個值，不是我寫錯），問題出在這個環境是跑在 **KasmVNC 遠端桌面**裡：`col-resize` 這種 CSS 游標關鍵字要靠作業系統提供對應的實際游標點陣圖，遠端桌面/X11 的游標主題常常不完整，好幾種不同的 resize 關鍵字（`col-resize`/`ew-resize`/`ns-resize`...）可能因為缺圖示而全部 fallback 成同一種通用圖案，剛好就是看起來像上下箭頭那種——這是環境限制，不是我能修 OS 游標主題的問題。**繞過方式**：改用自畫的 SVG 當游標圖片（`cursor: url("data:image/svg+xml,...") 9 9, col-resize`，`col-resize` 留著當 fallback），不再依賴系統提供的點陣圖，視覺上保證一定是正確的水平雙箭頭。驗證時把這個 SVG 單獨用 `<img>` 放大渲染出來確認形狀真的是清楚的 ↔（不是只信任程式碼裡的 path 座標數學算得對），同時用 Playwright 確認 hover 在把手上跟拖曳中 `document.body` 的 `getComputedStyle(...).cursor` 都正確解析成這個 data URI，不是原本的純關鍵字。
+
+### Backups 分頁改名
+
+你指出左側「Backups」這個名字跟頁面實際涵蓋的範圍（Backups + Restores + PITR）對不太上。側欄 `nav` 陣列跟頁面自己的 `<h1>` 都改成「Backups/Restores」，兩處保持一致（沒有只改一邊）。截圖確認展開/收合兩種側欄狀態、以及頁面標題三處都正常顯示，沒有因為字變長而被裁切或換行。
+
+## Pod Logs 檢視器 + Services 分頁補上 Endpoint 健康狀態（2026-08-07）
+
+問你「還有沒有甚麼功能可以新增的」，這次沒有查業界也沒有查自己的資料，純粹回顧這幾輪對話裡我們自己撞過的牆，挑出兩個都做了。
+
+### 1. Services 分頁補上 Endpoint 健康狀態（小、直接對應到今天的真實困惑）
+
+就是你稍早問的「`test-db-1-secondary` 這怎沒有 endpoint」那個問題——當時查出來是 operator 自己手動管理 EndpointSlice（selector-less Service），`kubectl get endpoints`（legacy API）查不到很正常，要查 `EndpointSlice`。這次直接把這個資訊做進畫面：`server.js` 的 `/services` route 現在同時抓 `kubectl get endpointslices -n <namespace> -o json`，用 `kubernetes.io/service-name` label 對應回每個 Service，算出 `endpointsReady`/`endpointsTotal`；`ServicesTab` 新增「Endpoints」欄，顯示「N/M ready」，全數 ready 綠色、部分 ready 黃色、全數不 ready 但有預期數量紅色、完全沒有預期端點（灰色，例如新建但還沒有任何 pod 註冊上去的情況，跟「本來該有卻掛光了」是不同語意，用顏色區分開）。
+
+**驗證**：對著真的 `test1/test-db-1` 打 API，`test-db-1-secondary` 正確回 `endpointsTotal: 2, endpointsReady: 2`，跟稍早手動 `kubectl get endpointslice` 查到的兩個 replica pod 完全對得上；headless Chrome 截圖確認 Services 分頁五個 service 全部正確顯示各自的 ready 數（`test-db-1-primary` 1/1、`test-db-1-secondary` 2/2、`test-db-1-internal`/`test-db-1` 3/3、`test-db-1-metrics` 1/1），無 console 錯誤。
+
+### 2. Pod Logs 檢視器（大，但是這類工具最基本的期待功能）
+
+之前這個 UI 完全看不到 container log——不管是這次 debug metrics 問題還是查 replication 狀態，都是我直接 `kubectl exec`/`kubectl logs`，這個 UI 完全幫不上忙。
+
+**做法**：`server.js` 新增 `GET /api/instances/:namespace/:name/pods/:podName/logs?container=&tailLines=`，沿用 chaos delete-pod 那支路由已經在用的防呆機制——先查 `app.kubernetes.io/instance=<name>` 這個 label selector 底下真的有哪些 pod，`podName` 不在清單裡直接拒絕，不接受任意 pod 名稱；`tailLines` 上限鎖 2000（這是「現在是什麼狀況」的即時檢視，不是完整歷史匯出的工具，也避免一次撈太多把回應撐爆），用 `kubectl logs ... --tail --timestamps` 抓。前端在 Pods 分頁每一列加「Logs」按鈕，跳出的 `LogsModal` 用 pod 自己的 `containers` 陣列動態產生 container 分頁（`mariadb`/`agent`，PMM 有開的話還會多一個 `pmm-client`，不用額外打 API 就知道有哪些 container，因為 Pods 分頁本來就已經抓過這個資料了）+ 可調整的 tail 行數（100/200/500/1000/2000）+ 手動 Refresh。**刻意不做成自動輪詢/即時 tail**——這是「現在 log 說了什麼」，不是 live tail，而且每幾秒重抓幾百行 log、放著開很久也不值得這個成本。
+
+**驗證**：直接對真的 API 打，確認 `test-db-1-0` 的 `mariadb`/`agent` 兩個 container 都能正確抓到 log（`agent` 是結構化 JSON log，`mariadb` 是一般文字 log，都正確原樣顯示）；刻意用一個不屬於這個 instance 的假 pod 名稱打同一支 API，確認正確回 400「... is not a pod of instance ...」，防呆機制有效。headless Chrome 截圖確認：Pods 分頁每列都有「Logs」按鈕；開啟後預設分頁（這個 pod 剛好是 `agent` 排在容器清單第一個）正確顯示即時的 log 內容並自動捲到底部；切到「mariadb」分頁後，內容整個換成完全不同的 mariadb server log（甚至剛好完整記錄了這次對話期間真的發生過的一次 primary 切換的 semi-sync/CHANGE MASTER 過程），證明分頁切換真的在打不同 container，不是顯示同一份資料；全程 console error/pageerror 都是空的。
+
+## Config Health 補上「TLS 憑證快過期」檢查（2026-08-07）
+
+問你「還有沒有可以自己想的功能」，這次沒有再查業界，純粹盤點這個 UI 自己已經有的資料裡有沒有沒被用到的檢查點。找到一個：`TLS encryption enabled` 這項現在只看有沒有開，不看憑證還剩多久到期——但 `/api/instances/:namespace/:name` 回傳的 `status.tls`（`serverCert`/`clientCert` 各自的 `notAfter`）其實**早就在**回傳資料裡了，TLS 分頁本身也已經用同一份資料在畫「Xd until expiry」，Config Health 只是沒去用。工程量很小、不用改後端：純前端新增一項檢查。
+
+**做法**：`HealthChecklist` 取 `detail.tls.serverCert`/`clientCert` 兩者裡**比較早到期**的那個（兩個都影響得了連線，取最緊迫的），沿用 `TLSTab` 既有的「30 天內算緊急」門檻（`daysLeft < 30` 標紅，跟 TLS 分頁本身的紅色門檻一致，不是另外發明一套標準）。這項檢查**只在 TLS 有開的時候才會出現**在清單裡（`...(detail.tlsEnabled && tlsDaysLeft != null ? [...] : [])`）——TLS 沒開的話「TLS encryption enabled」那項本身就已經標紅了，沒必要對同一個根因再顯示第二個紅色項目，所以分數分母會依 TLS 有沒有開而變（6 或 7），這是刻意的。
+
+**驗證**：先用真的 KIND 叢集上的 `test-db-1`（cert-manager 簽發、還有 90 天效期）確認畫面正常顯示「TLS certificate not expiring within 30 days」綠勾、分數變成 6/7（原本 6 項變 7 項）。負向路徑沒辦法用真憑證測（沒辦法叫 cert-manager 簽一張快過期的證書），改用 Playwright 攔截 `/api/instances/test1/test-db-1` 這支 API 的 response、把 `notAfter` 竄改成「10 天後」跟「5 天前」兩種情境重新截圖：10 天後那次正確顯示紅叉＋「Expires in 9 day(s)...」（`Math.floor` 因為時分秒差異少算一天，符合預期）；5 天前那次正確顯示紅叉＋「Certificate expired 6 day(s) ago — TLS connections may already be failing.」，兩種文案分支都對。這次順便新增的 `Date.now()` 直接呼叫（算天數用）會多一個 `react-hooks/purity` lint error，但 `TLSTab` 元件裡本來就有一模一樣的寫法（同一類 pre-existing 問題的第二個實例），跟著現有慣例沒有另外處理。
+
+## Activity 頁新增「UI Actions」分頁：本地操作紀錄（2026-08-07）
+
+你要我做完「Config Health 看真的 exporter 狀態」之後，再重新比一次業界同類工具。查證結果（WebSearch + `gh` 查真的 repo，不是憑印象）：Percona Everest 改名 OpenEverest、轉獨立開源專案，最近版本是 PostgreSQL 18.1 支援 + NodePort 網路選項，沒有新的管理面向功能；CloudNativePG 依然沒有官方 web console，唯一查到的「CNPG GUI」是個 2 顆星的個人 hobby 專案，訊號太弱不列入參考；Vitess VTAdmin 沒查到新的 schema 相關功能——上次的結論都還站得住。唯一有意思的新發現是查到之前沒比較過的 **KubeBlocks**，它的 `OpsRequest` API 把每個管理操作都做成可追蹤、可 rollback 的物件，但那是 operator 核心 CRD 設計，不是 UI 層能抄的東西，超出這個專案範圍。
+
+**真正促成這次動工的，是那個 2 星 hobby 專案功能列表裡順手看到的「audit logs」，剛好對上 `Ui.md` 自己記錄過的真實案例**——「New Instance 精靈：密碼確認 + Backup S3/VolumeSnapshot 支援」那次的插曲裡，`test1/my-mariadb-1` 這個 instance 消失了，查了半天才確認是有人在 UI 上按了 Delete，因為 `DELETE /api/instances/:namespace/:name` 這條路徑完全不會留下任何紀錄（`kubectl` 這邊的 operator finalizer log 只在 operator 自己觸發刪除時才有）。這個 UI 目前能做的破壞性操作已經不只刪 instance——chaos delete-pod、restore drill、switchover、CRD create/delete 都是——完全沒有本地紀錄可查。
+
+**做法**：`server.js` 加一個全域 middleware，攔截所有非 `GET` 的 request，在 `res.on('finish')` 時記一筆：時間、方法、路徑、根據路由 pattern 產生的人話摘要（例如 `DELETE /api/instances/test1/x` → `"Deleted instance test1/x"`）、HTTP 狀態碼、成功與否。這個 UI 沒有登入/身份系統，所以記不到「誰做的」，只能記「做了什麼、什麼時候」——但光是這樣，「`my-mariadb-1` 到底是不是我自己刪的」這種問題就能秒查，不用再花時間排除各種可能性。摘要產生邏輯（`describeAction()`）列舉了目前已知的每個 mutating route（deploy/delete instance、chaos drill、restore drill、switchover、image/storage/replicas/resources 等 PATCH、CRD create/delete、helm upgrade），沒列到的新路由會 fallback 成 `"METHOD /path"`，不會整條漏掉不記。
+
+存放方式：記憶體裡存最新 200 筆的 ring buffer，同時盡量寫進 `/tmp/mariadb-ui-actions.jsonl`（append-only JSON Lines）——這個 API server 沒有 HMR，改完程式碼常常要手動重啟（`Ui.md` 自己也記過這個限制），所以額外做了「啟動時讀檔案回填記憶體」，這樣重啟不會把最近的紀錄整個歸零。新增 `GET /api/activity/log` 回傳最新在前的清單。
+
+前端把原本的 Activity 頁拆成兩個分頁（沿用 `CrdsPanel`/`InstanceDetail`已經在用的 pill 樣式切換）：「Cluster Events」是原本內容（`kubectl get events`，operator 自己動到什麼東西），「UI Actions」是這次新增的（誰透過**這個 UI**動了什麼）——兩者故意分開顯示，不合併成一個表格，因為資料來源、代表的意義完全不同，混在一起容易誤會成同一件事。
+
+**驗證**：對著真的 API 打了一次 create database + delete database，確認 `/api/activity/log` 正確依序記下兩筆、摘要文字正確（`Created database "actiontest" in test1` / `Deleted database "actiontest" from test1`）；重啟 `node server.js`（模擬開發時常見的手動重啟）後確認這兩筆紀錄還在，證明檔案回填有效；headless Chrome 截圖確認「UI Actions」分頁正確顯示這兩筆（綠色勾勾、HTTP 方法、正確時間），切回「Cluster Events」分頁功能完全沒受影響（正好還顯示著上一個功能驗證時 scale 掉又scale回來的 `test-db-1-metrics` 事件，證明底層邏輯沒被這次重構動到），全程 console error/pageerror 都是空的。
+
+## Config Health 的「Monitoring connected」改成看真的 exporter 有沒有跑起來，不是只看 spec 開關（2026-08-07）
+
+這不是規劃出來的功能，是我們在你自己的叢集上debug「metrics 都開了怎麼沒有 pod」這個問題時，親手發現的一個真實 UI 缺陷：`test-db-1`/`test-db-2` 的 `spec.metrics.enabled` 是 `true`，但因為叢集裡沒裝 Prometheus Operator 的 `ServiceMonitor` CRD，operator 的 `reconcileMetrics()`（`internal/controller/mariadb_controller_metrics.go:35-44`）一開始檢查 CRD 存不存在，不存在就直接 `return`，連建 exporter Deployment 那步都不會跑到——只留一個容易被忽略的 Warning Event。而 Overview 分頁的 Config Health 卡片，「Monitoring connected」這項當時只檢查 `detail.pmmEnabled || detail.metricsEnabled`，也就是只看「有沒有勾選開啟」，不是「有沒有真的跑起來」，所以畫面上照樣是綠色勾勾，完全看不出問題。
+
+**修法**：
+- 後端 `/api/instances/:namespace/:name` 新增 `metricsReady` 欄位（新 helper `isMetricsExporterReady()`）：`spec.metrics.enabled` 為真時才去查 `kubectl get deployment <name>-metrics`，看 `status.readyReplicas >= 1`，不存在或沒 ready 都算 `false`。
+- 前端 Config Health 的 check 改成 `ok: detail.pmmEnabled || detail.metricsReady`（PMM 那半維持原本看 spec 是否有 sidecar，這次沒去動 PMM 那條路徑），沒過的時候依情況顯示不同的「為什麼」文字：完全沒開 monitoring 顯示原本的文字；有開但沒真的跑起來，顯示「Metrics is enabled in spec, but the exporter Pod isn't actually running — check the Events tab (a missing ServiceMonitor CRD is the usual cause).」，直接把根因線索寫在畫面上，不用自己再去猜。
+
+**驗證**：先確認 `test-db-1` 裝好 CRD、exporter 真的 Running 之後，API 正確回 `metricsReady: true`，Config Health 是 6/6 全綠。接著為了測負向路徑，暫停 operator（`kubectl scale deployment mariadb-operator -n test1 --replicas=0`，避免它把我手動改的狀態立刻改回來——這個 Deployment 是 operator 宣告式管理的，第一次沒暫停 operator 直接 `kubectl scale test-db-1-metrics --replicas=0` 就被自動改回 `1/1` 了，這步驟本身也算是意外驗證了 operator 自己的 reconcile 很快、很可靠），再把 `test-db-1-metrics` 手動 scale 到 0，這時 API 正確回 `metricsReady: false`，headless Chrome 截圖確認 Config Health 分數掉到 4/6、顯示紅叉跟上面那段新文字，其餘（Backup schedule/HA/TLS）不受影響。驗證完恢復 operator，它在幾秒內就把 `test-db-1-metrics` 自動 scale 回 `1/1`，Config Health 也自動變回綠色——全程沒有留下需要手動清理的東西。
+
+## User/Grant 權限矩陣 + Schema 一致性檢查（2026-08-07）
+
+延續「業界同類工具功能落差分析」那次列出的優先清單，前兩名（PMM 深連結、Backup/Restore 排程頁）都做完了，這次挑第 3、4 名一起做。
+
+### 1. User/Grant 權限矩陣（InstanceDetail → CRDs → 新增「Permissions」次分頁）
+
+**做法**：沒有動原本的 Users/Grants 兩個 CRD 分頁（純加法，原本的 CRUD 能力保留），在 `CrdsPanel` 裡多加一個「Permissions」次分頁（`Grid3x3` icon），渲染新元件 `components/crd/PermissionsMatrix.jsx`，不是走既有的泛用 `ResourceTab`。矩陣是 User（列）× Database（欄，第一欄固定是 `* (all)`）；每個 cell 顯示**精確比對** `username`+`database` 的 Grant CR 的權限徽章（`ALL PRIVILEGES` 特別標紅、其餘權限藍色小徽章），不把 `*` 通配的權限灌進其他欄位裡混著顯示——避免搞不清楚一個權限到底是從哪張 Grant CR 來的。點任何 cell 會跳出詳情視窗：列出這個 cell 底下所有 Grant（含 table/host/grant option 資訊，可個別刪除），底部一個「Add Grant」按鈕會帶 `prefill` 開既有的 `CreateResourceModal`（複用 Backups 頁「Restore」按鈕已經驗證過的 prefill 機制）。
+
+**列/欄範圍刻意做成「CR + Grant 參照」的聯集**，不是只看 User/Database CR 列表——像 `root`（沒有對應 User CR，是 MariaDB 內建帳號）或是 operator 自己管理的 `mariadb.sys`/`<instance>-mariadb-sys@localhost` 這種系統帳號的 Grant，都是靠 Grant CR 本身反查出來的，不會因為沒有 User CR 就被矩陣忽略。沒有對應 User CR 的列會標一行「no User CR」提示。後端完全沒改，直接用既有的 `GET /api/crd/:kind?namespace=&ref=&refField=mariaDbRef`（user/grant/database 三支）。
+
+### 2. Schema 一致性檢查（Replication 分頁新卡片，Replication 跟 Galera 都有）
+
+**做法**：`Replication`/`Galera` 拓樸的 Topology 圖下方新增一張「Schema Consistency」卡片，按「Check now」才觸發（不像其他卡片自動每 10 秒刷新——每個 pod 都要一次 `kubectl exec` 來回，跟這個 UI 其他讀 k8s API 的成本完全不是同個量級，硬接自動刷新只會拖慢整頁）。
+
+**後端**新增 `GET /api/instances/:namespace/:name/schema-check`：
+1. 讀 MariaDB CR 的 `spec.rootPasswordSecretKeyRef`，用新加的 `getSecretValue()` helper（`kubectl get secret -o jsonpath` + base64 解碼）拿到 root 密碼——這是這支 API 第一次需要「反查一把密碼的明文」，之前所有密碼相關程式碼都只是單向寫入 Secret，沒有讀回來用過。
+2. 對每個 `Running` 的 pod 平行下兩支 `kubectl exec ... -c mariadb -- mariadb -uroot -p<pw> -N -B -e "..."`：一支 `SELECT VERSION()`，一支結構指紋查詢——對 `information_schema.columns`（排除 `mysql`/`information_schema`/`performance_schema`/`sys` 系統 schema）依 `table_schema, table_name` 分組、把每個 table 的欄位名稱+型別串成簽章字串，再全部 `GROUP_CONCAT` 排序後取 `MD5`。**只比對表結構，不比對資料**——兩個 pod 的 schema 一模一樣就會算出同一個 hash，不管 table 裡的 row 內容差多少。
+3. 用陣列裡的第一個成功回應的 pod 當「reference」，其餘 pod 逐一比對 hash/version 是否相符，回傳 `schemaConsistent`/`versionConsistent` 兩個布林值。
+
+**前端**表格列出每個 pod 的 version/table 數/hash 前 12 碼（hover 看完整值），跟 reference pod 不同的欄位標紅（schema hash）或黃（version），整體用兩個大徽章（綠勾/紅叉）先給結論，不用逐行自己比對。
+
+**驗證**（對著真的 KIND 叢集跑，不是只看程式碼）：建了一個 2 replica 的 Replication instance（`test1/perm-test`），先建了 `shopdb`/`reportsdb` 兩個 Database、一個 `appuser`（對 `shopdb` 有 SELECT/INSERT/UPDATE、對 `reportsdb` 只有 SELECT）、一個 `root` 的 `* (all)` ALL PRIVILEGES grant——headless Chrome 截圖確認矩陣正確顯示這些真實資料，而且自動多列出了兩個我沒手動建的系統帳號（`mariadb.sys`、`<instance>-mariadb-sys@localhost`）的既有 grant，證明「CR + Grant 參照聯集」這個邏輯在真實資料上真的有作用，不是只有我自己建的資料才顯示得出來；點開 cell 詳情視窗、Add Grant 按鈕都正常運作，全程監聽 console error/pageerror 都是空的。
+
+Schema Consistency 卡片做了正反兩面驗證，不只測 happy path：先在兩個 pod 都沒有使用者 schema 的狀態下點「Check now」，兩邊都是 0 張表、hash 都是空值（`MD5(NULL)`，畫面正確顯示 `—` 不是假 hash），「Schema consistent」「Version consistent」都是綠色——這是正常情境。接著故意 `STOP SLAVE SQL_THREAD` 暫停 replica 的 SQL 執行緒，在 primary 建一個新 database+table（因為 replica 的 SQL 執行緒被停了，這個異動不會套用到 replica，確認過 replica 上 `SHOW DATABASES LIKE 'driftdb'` 真的查不到），再點一次「Check now」——畫面正確顯示「Schema DIVERGED」（紅色），primary 那列變成 1 張表、有真的 hash 值，replica 那列還是 0 張表、`—`，兩個 pod 的 hash 值也確實不同。驗證完 `START SLAVE SQL_THREAD` 恢復複製、確認 replica 追上資料，`perm-test` instance 跟相關 Secret 都已刪除。
+
+**已知取捨**：root 密碼在這支 API 執行期間會短暫出現在 `kubectl exec` 的 argv 裡（`-p<password>`）——跟這個程式庫既有的風險假設一致（`buildSecret()`/`restore-drill` 那條路徑本來就是把明文密碼放進本機執行的 `kubectl`/`helm` command line），沒有另外做 `MYSQL_PWD` 環境變數這類進一步收斂，如果之後要重新檢視這個 UI 的密碼處理慣例，這裡也該一併看。
 
 延續上一輪「業界功能落差分析」的討論，你要求依照分析結果實作 Backup/Restore 排程頁，之後又追加一個小需求：Instances 頁面加上有沒有排程備份的欄位。
 
@@ -71,13 +218,11 @@
 
 ### 結論：按「跟現有程式碼距離」排序的建議清單
 
-1. **PMM 深連結收尾**（工程量最小）——`InstanceDetail` Overview 已經顯示 PMM Server 位址跟 port-forward 指令（見上面「PMM 深連結」章節），但那是純文字，沒有更進一步的「一鍵打開」輔助（例如自動複製指令、或偵測 PMM Server 是否可從瀏覽器直接連到就給真連結）。
-2. **Backup/Restore 排程頁**（CRD 已齊全）——抄 Percona Everest 的 Scheduled Backups + 「用備份建立新 instance」，這個 UI 目前對 `backup`/`restore`/`physicalbackup`/`pointintimerecovery` 完全只有泛用 CrdsPanel，沒有專屬時間軸/日曆視圖。
-3. **User/Grant 管理頁**（CRD 已齊全）——抄 phpMyAdmin 的權限矩陣視圖，取代目前只能改 YAML 的 CrdsPanel。
-4. **Schema 一致性檢查**（小而美，抄 VTAdmin）——可以放進 Switchover 頁旁邊當個小工具，尤其對 Replication/Galera topology 有意義。
-5. Query console / EXPLAIN——工程量最大（要處理 SQL 執行、連線池、安全性），先不建議做，PMM 的 QAN 已經涵蓋這塊。
-
-目前還沒有動工，純粹是分析/規劃階段，記錄下來留給下一輪決定要不要做、做哪個。
+1. ~~PMM 深連結收尾~~ ✅ **2026-08-06 已完成**，見上面「對著真的 PMM Server 驗證後...」章節。
+2. ~~Backup/Restore 排程頁~~ ✅ **2026-08-06 已完成**，見上面「新增 Backups 頁面」章節。
+3. ~~User/Grant 管理頁~~ ✅ **2026-08-07 已完成**（做成矩陣視圖，不是取代原本的 CrdsPanel，兩者並存），見上面「User/Grant 權限矩陣 + Schema 一致性檢查」章節。
+4. ~~Schema 一致性檢查~~ ✅ **2026-08-07 已完成**（放進 Replication 分頁，不是 Switchover 頁——跟 Topology 圖同一頁比較合理），見上面「User/Grant 權限矩陣 + Schema 一致性檢查」章節。
+5. Query console / EXPLAIN——工程量最大（要處理 SQL 執行、連線池、安全性），先不建議做，PMM 的 QAN 已經涵蓋這塊。**目前清單裡唯一還沒做、也不建議做的一項。**
 
 ## 移除 Capacity 成本估算、新增 Switchover 頁面、精靈支援批次建立、PMM 深連結、版本落後提醒（2026-08-06）
 

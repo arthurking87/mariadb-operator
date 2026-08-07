@@ -37,21 +37,30 @@ function BackupBadge({ scheduled }) {
   )
 }
 
+// Raised surface tone (vs. the app-wide #161b22 card background) reserved for each page's
+// single most important row of numbers — gives the eye one clear "start here" surface
+// instead of every card (hero stat or minor nested list) reading as equally important.
+const SURFACE_RAISED = '#1a2028'
+
 function StatCard({ label, value, sub, icon: Icon, accent, loading }) {
   return (
-    <div className="rounded-xl border p-5" style={{ background: '#161b22', borderColor: '#21262d' }}>
-      <div className="flex items-start justify-between">
+    <div className="rounded-xl border p-5 relative overflow-hidden" style={{ background: SURFACE_RAISED, borderColor: '#21262d' }}>
+      {/* Per-card color identity: a left accent stripe + faint corner tint, so the four
+          stat cards are distinguishable at a glance instead of four identical gray boxes. */}
+      <div className="absolute inset-y-0 left-0 w-[3px]" style={{ background: accent }} />
+      <div className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(140% 100% at 0% 0%, ${accent}17, transparent 60%)` }} />
+      <div className="relative flex items-start justify-between">
         <div>
           <div className="text-xs font-medium mb-1" style={{ color: '#8b949e' }}>{label}</div>
-          <div className="text-2xl font-bold" style={{ color: '#e6edf3' }}>
+          <div className="text-3xl font-bold" style={{ color: '#e6edf3' }}>
             {loading
               ? <span className="inline-block w-8 h-7 rounded animate-pulse" style={{ background: '#21262d' }} />
               : value}
           </div>
           {sub && <div className="text-xs mt-1" style={{ color: '#8b949e' }}>{sub}</div>}
         </div>
-        <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: accent + '22' }}>
-          <Icon size={18} color={accent} />
+        <div className="w-10 h-10 rounded-lg flex items-center justify-center border" style={{ background: accent + '1f', borderColor: accent + '40' }}>
+          <Icon size={20} color={accent} strokeWidth={2.25} />
         </div>
       </div>
     </div>
@@ -286,12 +295,21 @@ export default function Dashboard({ setPage: navigate }) {
   const hasFilter    = activeFilters.length > 0 || search !== ''
 
   return (
-    <div className="px-8 py-8 max-w-6xl mx-auto">
+    <div className="px-8 py-8 max-w-[1800px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Instances</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>Manage your MariaDB clusters</p>
+        <div className="flex items-center gap-3.5">
+          {/* Page-title icon: sized/weighted above the 12-15px icons used inline everywhere
+              else, giving this page a visual anchor. Blue matches the instance name links in
+              the table below, tying the two together as "this page is about instances". */}
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+            style={{ background: 'rgba(88,166,255,0.12)', borderColor: 'rgba(88,166,255,0.3)' }}>
+            <Database size={20} color="#58a6ff" strokeWidth={2.25} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Instances</h1>
+            <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>Manage your MariaDB clusters</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg border" style={{ borderColor: '#30363d' }}>
@@ -374,7 +392,7 @@ export default function Dashboard({ setPage: navigate }) {
             )}
           </span>
           <div className="relative">
-            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: '#8b949e' }} />
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: '#8b949e' }} />
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
@@ -393,12 +411,12 @@ export default function Dashboard({ setPage: navigate }) {
 
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-16" style={{ color: '#8b949e' }}>
-            <Loader2 size={18} className="animate-spin" />
+            <Loader2 size={16} className="animate-spin" />
             <span className="text-sm">Loading instances…</span>
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-16">
-            <Database size={32} className="mx-auto mb-3" style={{ color: '#30363d' }} />
+            <Database size={24} className="mx-auto mb-3" style={{ color: '#30363d' }} />
             <p className="text-sm font-medium mb-1" style={{ color: '#8b949e' }}>
               {hasFilter ? 'No instances match the current filters' : 'No MariaDB instances found'}
             </p>
@@ -486,7 +504,7 @@ export default function Dashboard({ setPage: navigate }) {
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#8b949e' }}
                       title="Delete instance"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={13} />
                     </button>
                   </td>
                 </tr>

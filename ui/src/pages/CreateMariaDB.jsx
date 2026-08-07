@@ -348,8 +348,8 @@ function StepStorage({ form, update }) {
       {/* Resource presets */}
       <div>
         <div className="flex items-center gap-2 mb-3">
-          <Cpu size={14} color="#bc8cff" />
-          <span className="text-sm font-semibold" style={{ color: '#e6edf3' }}>CPU & Memory</span>
+          <Cpu size={16} color="#bc8cff" />
+          <span className="text-base font-semibold" style={{ color: '#e6edf3' }}>CPU & Memory</span>
         </div>
 
         <div className="grid grid-cols-3 gap-2 mb-4">
@@ -1019,7 +1019,7 @@ export default function CreateMariaDB({ setPage }) {
           <button onClick={deploy} disabled={deploying}
             className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all"
             style={{ background: deploying ? '#30363d' : 'linear-gradient(135deg,#f97316,#ea580c)', color: deploying ? '#8b949e' : 'white', boxShadow: deploying ? 'none' : '0 0 16px rgba(249,115,22,0.25)', cursor: deploying ? 'not-allowed' : 'pointer' }}>
-            {deploying ? <><Loader2 size={14} className="animate-spin" />Deploying…</> : <><Zap size={14} />Deploy Instance</>}
+            {deploying ? <><Loader2 size={13} className="animate-spin" />Deploying…</> : <><Zap size={13} />Deploy Instance</>}
           </button>
         )}
       </div>

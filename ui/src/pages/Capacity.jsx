@@ -12,15 +12,21 @@ function formatBytes(n) {
   return `${n % 1 === 0 ? n : n.toFixed(1)}${units[i]}`
 }
 
+// Raised-surface + left accent-stripe treatment, matching the hero stat row on Dashboard
+// and Backups (see Dashboard.jsx's SURFACE_RAISED / Backups.jsx's StatCard) — this is
+// Capacity's own "hero numbers" row, so it gets the same elevated surface rather than the
+// flat #161b22 tone used everywhere else on the page.
 function StatCard({ label, value, sub, icon: Icon, accent }) {
   return (
-    <div className="rounded-xl border p-5" style={{ background: '#161b22', borderColor: '#21262d' }}>
-      <div className="flex items-center gap-2 mb-3">
-        <Icon size={14} color={accent} />
-        <span className="text-xs font-medium uppercase tracking-wider" style={{ color: '#8b949e' }}>{label}</span>
+    <div className="rounded-xl border p-5 relative overflow-hidden" style={{ background: '#1a2028', borderColor: '#21262d' }}>
+      <div className="absolute inset-y-0 left-0 w-[3px]" style={{ background: accent }} />
+      <div className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(140% 100% at 0% 0%, ${accent}17, transparent 60%)` }} />
+      <div className="relative flex items-center gap-2 mb-3" style={{ color: '#8b949e' }}>
+        <Icon size={13} color={accent} />
+        <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
       </div>
-      <div className="text-2xl font-semibold font-mono" style={{ color: '#e6edf3' }}>{value}</div>
-      {sub && <div className="text-xs mt-1" style={{ color: '#8b949e' }}>{sub}</div>}
+      <div className="relative text-2xl font-semibold font-mono" style={{ color: '#e6edf3' }}>{value}</div>
+      {sub && <div className="relative text-xs mt-1" style={{ color: '#8b949e' }}>{sub}</div>}
     </div>
   )
 }
@@ -66,12 +72,20 @@ export default function Capacity({ setPage }) {
   const { count, reset, total, paused, togglePause } = useAutoRefresh(fetchCapacity, getSettings().refreshInterval)
 
   return (
-    <div className="px-8 py-8 max-w-6xl mx-auto">
+    <div className="px-8 py-8 max-w-[1800px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Capacity</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>Requested CPU / memory / storage committed across all MariaDB instances</p>
+        <div className="flex items-center gap-3.5">
+          {/* Page-title badge, same treatment as Dashboard/Backups — green distinguishes this
+              page's identity from Dashboard's blue and Backups' orange. */}
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+            style={{ background: 'rgba(63,185,80,0.12)', borderColor: 'rgba(63,185,80,0.3)' }}>
+            <Gauge size={20} color="#3fb950" strokeWidth={2.25} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Capacity</h1>
+            <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>Requested CPU / memory / storage committed across all MariaDB instances</p>
+          </div>
         </div>
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border" style={{ borderColor: '#30363d' }}>
           <CountdownRing count={count} total={total} paused={paused} onTogglePause={togglePause} />
@@ -117,7 +131,7 @@ export default function Capacity({ setPage }) {
           {/* Per-namespace breakdown */}
           {data.namespaces.length > 0 && (
             <div className="rounded-xl border p-5 mb-6" style={{ background: '#161b22', borderColor: '#21262d' }}>
-              <h2 className="text-sm font-semibold mb-4" style={{ color: '#e6edf3' }}>By namespace</h2>
+              <h2 className="text-base font-semibold mb-4" style={{ color: '#e6edf3' }}>By namespace</h2>
               {data.namespaces.map(ns => (
                 <div key={ns.namespace} className="mb-5 last:mb-0 pb-5 last:pb-0 border-b last:border-0" style={{ borderColor: '#21262d' }}>
                   <div className="flex items-center gap-2 mb-3">

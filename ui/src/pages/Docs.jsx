@@ -55,11 +55,20 @@ export default function Docs() {
   return (
     <div className="px-8 py-8 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Docs</h1>
-        <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>
-          Reference documentation for this operator, opens on GitHub in a new tab.
-        </p>
+      <div className="mb-8 flex items-center gap-3.5">
+        {/* Page-title badge, same treatment as the core pages — deliberately neutral gray
+            (rather than one of the section accent colors below) since this is a secondary,
+            reference-only page, not a core workflow. */}
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+          style={{ background: 'rgba(139,148,158,0.12)', borderColor: 'rgba(139,148,158,0.3)' }}>
+          <BookOpen size={20} color="#8b949e" strokeWidth={2.25} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Docs</h1>
+          <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>
+            Reference documentation for this operator, opens on GitHub in a new tab.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-5">
@@ -69,7 +78,7 @@ export default function Docs() {
               <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: accent + '22' }}>
                 <Icon size={16} color={accent} />
               </div>
-              <h2 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>{title}</h2>
+              <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>{title}</h2>
             </div>
             <div className="flex flex-col gap-0.5">
               {docs.map(({ file, label }) => (

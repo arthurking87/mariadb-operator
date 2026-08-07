@@ -13,15 +13,24 @@ function isFailed(item) {
   return !!c && c.status === 'False'
 }
 
-function StatCard({ label, value, tone, icon: Icon }) {
-  const color = tone === 'danger' ? '#f85149' : tone === 'warn' ? '#d29922' : tone === 'ok' ? '#3fb950' : '#e6edf3'
+// Matches the raised-surface + accent-stripe treatment on the Dashboard's stat row (see
+// Dashboard.jsx's SURFACE_RAISED) so the two pages' "hero numbers" read as the same kind of
+// thing. `tone` (danger/warn/ok) wins when set — that's the row telling you something needs
+// attention; otherwise falls back to `accent`, tying the card to its CRD kind's own color
+// (e.g. Backup orange, Restore amber) instead of a flat neutral gray.
+function StatCard({ label, value, tone, icon: Icon, accent }) {
+  const toneColor = tone === 'danger' ? '#f85149' : tone === 'warn' ? '#d29922' : tone === 'ok' ? '#3fb950' : null
+  const stripe = toneColor || accent || '#8b949e'
+  const color = toneColor || '#e6edf3'
   return (
-    <div className="rounded-xl border p-4" style={{ background: '#161b22', borderColor: '#21262d' }}>
-      <div className="flex items-center gap-2 mb-2" style={{ color: '#8b949e' }}>
-        <Icon size={13} />
+    <div className="rounded-xl border p-4 relative overflow-hidden" style={{ background: '#1a2028', borderColor: '#21262d' }}>
+      <div className="absolute inset-y-0 left-0 w-[3px]" style={{ background: stripe }} />
+      <div className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(140% 100% at 0% 0%, ${stripe}17, transparent 60%)` }} />
+      <div className="relative flex items-center gap-2 mb-2" style={{ color: '#8b949e' }}>
+        <Icon size={13} color={stripe} />
         <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
       </div>
-      <div className="text-2xl font-semibold font-mono" style={{ color }}>{value}</div>
+      <div className="relative text-2xl font-semibold font-mono" style={{ color }}>{value}</div>
     </div>
   )
 }
@@ -30,8 +39,8 @@ function SectionHeader({ icon: Icon, title, count, accent, children }) {
   return (
     <div className="flex items-center justify-between mb-3">
       <div className="flex items-center gap-2">
-        <Icon size={15} color={accent} />
-        <h2 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>{title}</h2>
+        <Icon size={16} color={accent} />
+        <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>{title}</h2>
         <span className="text-xs" style={{ color: '#8b949e' }}>({count})</span>
       </div>
       {children}
@@ -156,15 +165,21 @@ export default function Backups({ setPage }) {
   const goToInstance = (namespace, name) => setPage && setPage('detail', { namespace, name })
 
   return (
-    <div className="px-8 py-8 max-w-6xl mx-auto">
+    <div className="px-8 py-8 max-w-[1800px] mx-auto">
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
-        <div className="min-w-0 flex-1 pr-6">
-          <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>Backups</h1>
-          <p className="text-sm mt-0.5 break-words" style={{ color: '#8b949e' }}>
-            Backup schedule health and restore history across every instance in the cluster — Backup / PhysicalBackup /
-            Restore / PointInTimeRecovery in one place, instead of one instance's CRDs tab at a time.
-          </p>
+        <div className="min-w-0 flex-1 pr-6 flex items-start gap-3.5">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+            style={{ background: 'rgba(249,115,22,0.12)', borderColor: 'rgba(249,115,22,0.3)' }}>
+            <Archive size={20} color="#f97316" strokeWidth={2.25} />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>Backups/Restores</h1>
+            <p className="text-sm mt-0.5 break-words" style={{ color: '#8b949e' }}>
+              Backup schedule health and restore history across every instance in the cluster — Backup / PhysicalBackup /
+              Restore / PointInTimeRecovery in one place, instead of one instance's CRDs tab at a time.
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border flex-shrink-0" style={{ borderColor: '#30363d' }}>
           <CountdownRing count={count} total={total} paused={paused} onTogglePause={togglePause} />
@@ -194,10 +209,10 @@ export default function Backups({ setPage }) {
         <>
           {/* Stat cards */}
           <div className="grid grid-cols-4 gap-3 mb-8">
-            <StatCard label="Backups" value={backupRows.length} icon={Archive} />
+            <StatCard label="Backups" value={backupRows.length} icon={Archive} accent="#f97316" />
             <StatCard label="No schedule" value={noScheduleInstances.length} tone={noScheduleInstances.length > 0 ? 'warn' : 'ok'} icon={AlertTriangle} />
             <StatCard label="Needs attention" value={attentionCount} tone={attentionCount > 0 ? 'danger' : 'ok'} icon={XCircle} />
-            <StatCard label="Restore jobs" value={restores.length} icon={RotateCcw} />
+            <StatCard label="Restore jobs" value={restores.length} icon={RotateCcw} accent="#d29922" />
           </div>
 
           {noScheduleInstances.length > 0 && (
@@ -405,7 +420,7 @@ export default function Backups({ setPage }) {
               <button onClick={handleDelete} disabled={deleting}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium"
                 style={{ background: '#f85149', color: 'white', opacity: deleting ? 0.7 : 1 }}>
-                {deleting && <Loader2 size={14} className="animate-spin" />}
+                {deleting && <Loader2 size={13} className="animate-spin" />}
                 Delete
               </button>
               <button onClick={() => setDeleteTarget(null)}

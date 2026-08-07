@@ -60,7 +60,7 @@ export default function GlobalSearch({ navigate }) {
   return (
     <div ref={boxRef} className="relative w-80">
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ background: '#0d1117', borderColor: open ? '#f97316' : '#30363d' }}>
-        <Search size={14} color="#8b949e" />
+        <Search size={13} color="#8b949e" />
         <input
           value={q}
           onChange={e => { setQ(e.target.value); setOpen(true) }}

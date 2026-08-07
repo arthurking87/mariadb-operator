@@ -19,14 +19,17 @@ export default function StandaloneCrdPage({ schema }) {
   }, [])
 
   return (
-    <div className="px-8 py-8 max-w-6xl mx-auto">
+    <div className="px-8 py-8 max-w-[1800px] mx-auto">
       <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: schema.accent + '22' }}>
-            <Icon size={18} color={schema.accent} />
+        <div className="flex items-center gap-3.5">
+          {/* Page-title badge, aligned with the w-11/icon-20/bordered treatment used
+              throughout the rest of the app (see Dashboard.jsx). */}
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border"
+            style={{ background: schema.accent + '1f', borderColor: schema.accent + '4d' }}>
+            <Icon size={20} color={schema.accent} strokeWidth={2.25} />
           </div>
           <div>
-            <h1 className="text-xl font-semibold" style={{ color: '#e6edf3' }}>{schema.pluralLabel}</h1>
+            <h1 className="text-2xl font-semibold" style={{ color: '#e6edf3' }}>{schema.pluralLabel}</h1>
             <p className="text-sm mt-0.5" style={{ color: '#8b949e' }}>Cluster-level resource, not tied to a single instance.</p>
           </div>
         </div>
