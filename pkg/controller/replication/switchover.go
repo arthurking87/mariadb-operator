@@ -271,6 +271,9 @@ func (r *ReplicationReconciler) waitForNewPrimarySync(ctx context.Context, req *
 	if err := wait.PollUntilSuccessOrContextCancel(syncCtx, logger, func(ctx context.Context) error {
 		status, err := newPrimaryClient.ReplicaStatus(ctx, logger, sql.WithConnectionName(ReplicaConnectionName))
 		if err != nil {
+			if sql.IsConnectionNotExists(err) {
+				return errors.New("replication channel not configured yet on new primary")
+			}
 			return fmt.Errorf("error getting new primary status: %v", err)
 		}
 		gtidDomainId, err := newPrimaryClient.GtidDomainId(ctx)

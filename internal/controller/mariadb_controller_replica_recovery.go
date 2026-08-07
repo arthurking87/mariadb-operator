@@ -392,6 +392,9 @@ func (r *MariaDBReconciler) ensureReplicaRecovered(ctx context.Context, replica 
 
 		replStatus, err := client.ReplicaStatus(ctx, logger, sql.WithConnectionName(replication.ReplicaConnectionName))
 		if err != nil {
+			if sql.IsConnectionNotExists(err) {
+				return errors.New("replica not recovered: replication channel not configured yet")
+			}
 			return fmt.Errorf("error getting replica status: %v", err)
 		}
 

@@ -89,7 +89,11 @@ func (f *FailoverHandler) findCandidates(ctx context.Context, pods []corev1.Pod)
 
 		status, err := sqlClient.ReplicaStatus(ctx, podLogger, sql.WithConnectionName(ReplicaConnectionName))
 		if err != nil {
-			podLogger.Info("Unable to get replica status Skipping...", "err", err)
+			if sql.IsConnectionNotExists(err) {
+				podLogger.Info("Replication channel not configured yet. Skipping...")
+			} else {
+				podLogger.Info("Unable to get replica status. Skipping...", "err", err)
+			}
 			continue
 		}
 
