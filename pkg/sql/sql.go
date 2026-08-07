@@ -700,7 +700,7 @@ func (c *Client) SystemVariable(ctx context.Context, variable string) (string, e
 
 	var val string
 	if err := row.Scan(&val); err != nil {
-		return "", nil
+		return "", err
 	}
 	return val, nil
 }
