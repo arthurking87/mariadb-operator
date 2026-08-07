@@ -628,29 +628,39 @@ function HealthChecklist({ detail, namespace, name }) {
   const tlsDaysLeft = tlsCerts.length
     ? Math.min(...tlsCerts.map(c => Math.floor((new Date(c.notAfter) - Date.now()) / 86400000)))
     : null
+  // Weight + critical flag drive the score below — critical items are ones where failure
+  // means data loss or an active security/availability gap (backups, TLS, HA); non-critical
+  // items are convenience/hygiene (limits, monitoring, staying current). Weights are a
+  // judgment call, not a standard — see Ui.md's "Config Health 加權分數" writeup for the
+  // reasoning and the industry precedents (CIS Benchmark / Skeema / SonarQube) it's modeled on.
   const checks = [
     {
       label: 'Resource requests/limits set', ok: !!(detail.resources?.cpuLimit && detail.resources?.memLimit),
       why: 'Without limits, one noisy instance can starve others (or itself) on a shared node.',
+      weight: 10, critical: false,
     },
     {
       label: 'TLS encryption enabled', ok: detail.tlsEnabled,
       why: 'Client↔server traffic is in plaintext otherwise.',
+      weight: 20, critical: true,
     },
     ...(detail.tlsEnabled && tlsDaysLeft != null ? [{
       label: 'TLS certificate not expiring within 30 days', ok: tlsDaysLeft >= 30,
       why: tlsDaysLeft < 0
         ? `Certificate expired ${Math.abs(tlsDaysLeft)} day(s) ago — TLS connections may already be failing. See the TLS tab and rotate it.`
         : `Expires in ${tlsDaysLeft} day(s). See the TLS tab for which certificate and rotate it before it lapses.`,
+      weight: 15, critical: true,
     }] : []),
     {
       label: 'Scheduled (recurring) backup', ok: hasScheduledBackup,
       why: 'A one-off backup goes stale; only a cron schedule keeps you covered over time.',
       loading: hasScheduledBackup === null,
+      weight: 20, critical: true,
     },
     {
       label: 'High availability topology', ok: isHA,
       why: isHA ? null : 'Standalone / single-replica — a lost pod means downtime until it reschedules, with no automatic failover.',
+      weight: 15, critical: true,
     },
     {
       // Checks metricsReady (the exporter Deployment is actually up), not metricsEnabled
@@ -661,15 +671,21 @@ function HealthChecklist({ detail, namespace, name }) {
         : detail.metricsEnabled
           ? 'Metrics is enabled in spec, but the exporter Pod isn\'t actually running — check the Events tab (a missing ServiceMonitor CRD is the usual cause).'
           : 'No visibility into query performance or resource pressure until something is already broken.',
+      weight: 10, critical: false,
     },
     {
       label: `Up to date (target: ${targetVersion})`, ok: !behind,
       why: `Running ${detail.version}, behind the version you set in Settings — missing whatever fixes landed since.`,
+      weight: 10, critical: false,
     },
   ]
   const loaded = checks.filter(c => !c.loading)
   const passed = loaded.filter(c => c.ok).length
-  const scoreColor = passed === loaded.length ? '#3fb950' : passed >= loaded.length / 2 ? '#d29922' : '#f85149'
+  const weightTotal = loaded.reduce((sum, c) => sum + c.weight, 0)
+  const weightPassed = loaded.filter(c => c.ok).reduce((sum, c) => sum + c.weight, 0)
+  const score = weightTotal ? Math.round(100 * weightPassed / weightTotal) : 100
+  const grade = score >= 90 ? 'A' : score >= 80 ? 'B' : score >= 70 ? 'C' : score >= 60 ? 'D' : 'F'
+  const scoreColor = score >= 80 ? '#3fb950' : score >= 60 ? '#d29922' : '#f85149'
 
   return (
     // Raised surface (#1a2028, vs. the standard #161b22 card tone below it) — this is the
@@ -681,9 +697,12 @@ function HealthChecklist({ detail, namespace, name }) {
           <Icons.HeartPulse size={16} color={scoreColor} />
           <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>Config Health</h2>
         </div>
-        <span className="text-xs font-mono px-2 py-0.5 rounded-full font-semibold" style={{ background: scoreColor + '22', color: scoreColor }}>
-          {passed}/{loaded.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: '#8b949e' }}>{passed}/{loaded.length} checks</span>
+          <span className="text-xs font-mono px-2 py-0.5 rounded-full font-semibold" style={{ background: scoreColor + '22', color: scoreColor }}>
+            {score} · {grade}
+          </span>
+        </div>
       </div>
       <div className="space-y-1">
         {checks.map((c, i) => {
@@ -691,20 +710,24 @@ function HealthChecklist({ detail, namespace, name }) {
           // background and colored left edge on the row, not just a differently-colored
           // icon — so the eye catches the problem without reading every line. Passing rows
           // recede (muted label, thin divider) so the contrast does the scanning for you.
+          // Critical failures (data-loss/security/availability gaps) get the red treatment;
+          // non-critical ones keep the softer amber, so a red row is always worth reacting to
+          // first rather than every failure looking equally urgent.
           const attention = !c.loading && !c.ok
+          const rowColor = c.critical ? '#f85149' : '#d29922'
           return (
             <div key={c.label}
               className="flex items-start justify-between py-2 pl-2.5 pr-2 -mx-0.5 rounded-lg transition-colors"
               style={{
-                background: attention ? 'rgba(210,153,34,0.08)' : 'transparent',
-                borderLeft: `2px solid ${attention ? '#d29922' : 'transparent'}`,
+                background: attention ? rowColor + '14' : 'transparent',
+                borderLeft: `2px solid ${attention ? rowColor : 'transparent'}`,
                 borderBottom: !attention && i < checks.length - 1 ? '1px solid #21262d' : 'none',
               }}>
               <div>
                 <div className="flex items-center gap-2">
                   {c.loading
                     ? <Loader2 size={13} className="animate-spin" color="#8b949e" />
-                    : c.ok ? <CheckCircle2 size={13} color="#3fb950" /> : <XCircle size={13} color="#d29922" />}
+                    : c.ok ? <CheckCircle2 size={13} color="#3fb950" /> : <XCircle size={13} color={rowColor} />}
                   <span className="text-sm" style={{ color: attention ? '#e6edf3' : '#8b949e', fontWeight: attention ? 600 : 400 }}>{c.label}</span>
                 </div>
                 {attention && c.why && (

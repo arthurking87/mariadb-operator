@@ -3,6 +3,50 @@
 > 產生日期：2026-08-05。記錄 `ui/` 這個 React + Express 小面板的現況、異動決策，以及尚未實作項目的規劃討論。
 > 面板結構：`ui/src/App.jsx`（路由）+ `ui/src/components/Sidebar.jsx`（左側導覽）+ `ui/src/pages/*.jsx`（各頁）+ `ui/server.js`（Express API，包在同一個容器內用 `kubectl`/`helm` 操作叢集）。
 
+## Config Health 加權分數：實作 + 真實叢集測試（2026-08-07）
+
+延續下面「討論」那節的結論，實際把方案 3（SonarQube/Lighthouse 加權分數）做進 `InstanceDetail.jsx` 的 `HealthChecklist`。
+
+**權重怎麼定的**：7 項檢查分兩級——`critical: true` 的是「失敗就代表資料遺失/安全/可用性有實際缺口」的項目，`critical: false` 是「便利性/維運衛生」的項目。權重總和抓 100，方便直接當百分比讀：
+
+| 檢查項目 | 權重 | critical |
+|---|---|---|
+| TLS encryption enabled | 20 | 是 |
+| Scheduled (recurring) backup | 20 | 是 |
+| TLS certificate not expiring within 30 days | 15 | 是 |
+| High availability topology | 15 | 是 |
+| Resource requests/limits set | 10 | 否 |
+| Monitoring connected (PMM or metrics) | 10 | 否 |
+| Up to date | 10 | 否 |
+
+分數算法：`score = round(100 × Σ(通過項目權重) / Σ(全部已載入項目權重))`（TLS 憑證那項只在 TLS 有開且抓得到憑證時才會出現在分母裡，跟原本的條件式清單邏輯一致）。等級門檻抓一般常見的 A/B/C/D/F：`≥90 A`、`≥80 B`、`≥70 C`、`≥60 D`、其餘 F；顏色跟現有 `Config Health` 圖示配色系統共用——`≥80` 綠、`≥60` 琥珀、`<60` 紅。
+
+**視覺上多做的一件事**：原本失敗的檢查項目一律是琥珀色底+左側色條。現在改成依 `critical` 決定顏色——`critical` 失敗用紅色（`#f85149`），非 critical 失敗維持原本的琥珀色（`#d29922`）。這樣「沒開 TLS」跟「沒設資源限制」這兩種失敗在畫面上看起來輕重不同，不會全部長得一樣重要。
+
+**在真實 KIND 叢集上實測**（`test1/test-db-1`，不是只看程式碼推論）：
+1. **基準值**：`test-db-1` 原本就沒有排程備份（`Backups` 頁面本來就顯示 "No schedule"），所以 baseline 是 **6/7 checks、80 分、B 級**，"Scheduled (recurring) backup" 那行呈現紅色（critical 失敗，權重 20）。
+2. **故意拿掉資源限制**（`kubectl patch mariadb test-db-1 --type=json -p='[{"op":"remove","path":"/spec/resources/limits"}]'`）：分數變成 **5/7 checks、70 分、C 級**，"Resource requests/limits set" 那行是琥珀色（non-critical 失敗），跟原本紅色的 backup 那行並存，兩種顏色同時出現在畫面上，證實了嚴重度分色確實有效。此外也連帶看到 `test-db-1` 因為資源改動觸發 rolling restart，短暫進入 `Not Ready`、`2 replicas` 的狀態——這是操作本身的真實副作用，不是 bug。
+3. **想額外測「拿掉 HA」這條 critical 項目**：試著把 `spec.replicas` 從 3 改成 1，被 mariadb-operator 自己的 admission webhook 擋下來：`Multiple replicas must be specified when 'spec.replication' or 'spec.galera' are configured`。算是一個意外但有意義的發現——Replication/Galera 這種拓樸下，operator 自己的 webhook 已經防住了「意外把它縮成單副本」這種操作，所以這條 Config Health 檢查在這兩種拓樸下實務上很難被「不小心」踩到；它主要是在抓「這台一開始就是 Standalone 部署」的狀況，而不是防呆已縮編的 HA 叢集。
+4. **復原資源限制**（patch 加回 `limits: {cpu: 500m, memory: 512Mi}`），等 StatefulSet 滾動更新完（`Ready` 回到 `True`、3/3 replicas）後重新截圖，分數準確回到 **80 分、B 級**，跟第 1 步基準值完全一致。
+5. **實際補一個排程備份**（`kubectl apply` 一個 `Backup` CR，`spec.schedule.cron: "0 3 * * *"`，指到 `test-db-1`）：分數變成 **7/7 checks、100 分、A 級**，圖示變綠、所有列都收斂成灰字——這是第一次看到滿分狀態，跟其他分數等級的視覺（紅/琥珀/綠）放在一起比對過，確認顏色分級跟通過率是連動的。跑完後把這個測試用的 `Backup` CR 刪掉，讓叢集回到測試前的狀態。
+
+**驗證**：`vite build` 過；`eslint` 對修改的 `InstanceDetail.jsx` 只出現這個 repo 一路以來已知的基準線問題（`react-hooks/purity` 的 `Date.now()`、`react-hooks/set-state-in-effect`、`react-hooks/static-components`、`conditionColor` 的 `no-unused-vars`），沒有新增任何問題類別。
+
+## 討論：Config Health 要不要改成加權分數（2026-08-07）
+
+你問業界有沒有「有 PK 加分、沒有扣分」這種資料庫評分做法。查過後，比較接近的做法其實分三種，各自邏輯不太一樣，沒有單一業界標準：
+
+1. **CIS Benchmark 風格**（MySQL/PostgreSQL 都有官方 Benchmark）：每條控制項獨立通過/不通過，但依 Level 1（基本）/ Level 2（進階）給不同權重，最後算出「整體合規百分比」。適合上百條控制項的大型合規框架。
+2. **Skeema（MySQL schema linter）風格**：把問題（沒有 PK、字元集用 utf8 不是 utf8mb4...）分成 error/warning/ignore 三級，可設定各條規則的嚴重度，但**不加總成單一分數**，輸出是一份問題清單。
+3. **SonarQube Quality Gate / Lighthouse 分數風格**：每個檢查依嚴重度給扣分權重，加總後正規化成 0-100 分或 A-F 等級。這是目前泛用軟體品質工具最常見的「加分/扣分」模型，也最接近你描述的直覺。
+
+**我的判斷**：這三個裡面，方案 3（SonarQube/Lighthouse 加權分數）最適合我們現有的 `Config Health`（`InstanceDetail.jsx` 的 `HealthChecklist`，目前 7 項檢查、`N/7` 通過數、每項權重相同）。方案 1 是為上百條控制項設計的多層級合規框架，套在只有 7 條檢查的場景上過度複雜；方案 2 完全不產生總分，反而是從我們現在已經有的「一眼看 `N/7` 分數」倒退回純清單。方案 3 只是在現有模型上加一個權重欄位，改動最小，又能讓「TLS 快過期」這種真正嚴重的項目跟「沒排程備份」這種次要項目分開輕重，不會被稀釋成看起來一樣重要。
+
+**尚未實作**——這輪只是把選項跟建議記錄下來，還沒動 `HealthChecklist` 的程式碼。之後若要做，需要決定的細節：
+- 各檢查項目的權重怎麼定（例如：TLS 停用/憑證過期算「安全」類，可能該比「沒排程備份」這種「維運便利性」類權重更高）。
+- 分數呈現方式：維持 `N/7` 式的通過數，還是改成 0-100 分 / A-F 等級？等級制對使用者更直覺，但要额外定義分級門檻。
+- 要不要保留現有「整行變色」的視覺處理（失敗項目琥珀色底），或改成依權重高低有不同警示強度（例如高權重失敗用紅色、低權重失敗維持琥珀色）。
+
 ## 視覺美化：用 agent 當「UI 美術家」、我當設計師互動執行（2026-08-07）
 
 你要求開一個 agent 當 UI 美術家、我當設計師跟它互動修改 UI。流程：我先自己截了 Dashboard/Overview/Replication 三個現況畫面當「設計師審視現況」，抓出具體批評（不是憑空講「要更好看」）——整個 app 每個區塊都用同一種深色卡片＋細邊框，缺乏層次；橘色 `#f97316` 是唯一在做「這是重要/可互動」訊號的顏色；`crdSchemas.js` 裡每個 CRD 其實早就定義了自己的 `accent` 色（Database 藍、User 綠、Grant 紫、Backup 橘...），但幾乎沒被用到 CRD 分頁小圖示以外的地方；Config Health 清單裡失敗項目只靠圖示顏色差異提示，掃視不夠快。
