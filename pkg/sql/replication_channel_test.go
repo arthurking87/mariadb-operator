@@ -26,14 +26,39 @@ import (
 // recordingDriver is a fake database/sql/driver.Driver that records every SQL statement
 // it is asked to execute or query, without needing a real database connection.
 type recordingDriver struct {
-	mu      sync.Mutex
-	queries []string
+	mu           sync.Mutex
+	queries      []string
+	queryErrors  map[string]error
+	emptyResults map[string]bool
 }
 
 func (d *recordingDriver) record(query string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.queries = append(d.queries, query)
+}
+
+// errorOnQuery makes any future Query call for the given exact SQL text return err instead
+// of a result set.
+func (d *recordingDriver) errorOnQuery(query string, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.queryErrors == nil {
+		d.queryErrors = make(map[string]error)
+	}
+	d.queryErrors[query] = err
+}
+
+// emptyResultOnQuery makes any future Query call for the given exact SQL text return a
+// zero-row result set, emulating e.g. "SHOW REPLICA STATUS" on a channel with no
+// configured connection.
+func (d *recordingDriver) emptyResultOnQuery(query string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.emptyResults == nil {
+		d.emptyResults = make(map[string]bool)
+	}
+	d.emptyResults[query] = true
 }
 
 func (d *recordingDriver) Queries() []string {
@@ -84,6 +109,19 @@ func (s *recordingStmt) Exec(args []driver.Value) (driver.Result, error) {
 
 func (s *recordingStmt) Query(args []driver.Value) (driver.Rows, error) {
 	s.conn.driver.record(s.query)
+
+	s.conn.driver.mu.Lock()
+	err, hasErr := s.conn.driver.queryErrors[s.query]
+	empty := s.conn.driver.emptyResults[s.query]
+	s.conn.driver.mu.Unlock()
+
+	if hasErr {
+		return nil, err
+	}
+	if empty {
+		// served: true short-circuits Next() to io.EOF immediately, i.e. zero rows.
+		return &singleValueRows{served: true}, nil
+	}
 	return &singleValueRows{}, nil
 }
 
@@ -297,6 +335,77 @@ func TestReplicaStatusChannel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMigrateLegacyReplicationChannel verifies that MigrateLegacyReplicationChannel only
+// touches MariaDB's default/unnamed channel (never a named one), and only issues
+// STOP SLAVE / RESET SLAVE when a legacy connection is actually present.
+func TestMigrateLegacyReplicationChannel(t *testing.T) {
+	const showLegacyStatus = "SHOW REPLICA  STATUS"
+
+	t.Run("no legacy channel is a no-op", func(t *testing.T) {
+		client, drv := newRecordingClient(t)
+		drv.emptyResultOnQuery(showLegacyStatus)
+
+		if err := client.MigrateLegacyReplicationChannel(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		want := []string{showLegacyStatus}
+		if got := drv.Queries(); !slicesEqual(got, want) {
+			t.Errorf("got queries %v, want %v", got, want)
+		}
+	})
+
+	t.Run("legacy channel not yet created (Error 1617) is a no-op", func(t *testing.T) {
+		client, drv := newRecordingClient(t)
+		drv.errorOnQuery(showLegacyStatus, errors.New("Error 1617 (HY000): There is no master connection ''"))
+
+		if err := client.MigrateLegacyReplicationChannel(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		want := []string{showLegacyStatus}
+		if got := drv.Queries(); !slicesEqual(got, want) {
+			t.Errorf("got queries %v, want %v", got, want)
+		}
+	})
+
+	t.Run("legacy channel present is stopped and reset on the unnamed connection", func(t *testing.T) {
+		client, drv := newRecordingClient(t)
+		// showLegacyStatus is left with the fake driver's default one-row response, i.e.
+		// a legacy connection is present.
+
+		if err := client.MigrateLegacyReplicationChannel(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		want := []string{showLegacyStatus, "STOP SLAVE ;", "RESET SLAVE  ALL;"}
+		if got := drv.Queries(); !slicesEqual(got, want) {
+			t.Errorf("got queries %v, want %v", got, want)
+		}
+	})
+
+	t.Run("genuine SQL error is propagated", func(t *testing.T) {
+		client, drv := newRecordingClient(t)
+		drv.errorOnQuery(showLegacyStatus, errors.New("Error 1045 (28000): Access denied for user 'root'@'%'"))
+
+		if err := client.MigrateLegacyReplicationChannel(context.Background()); err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	})
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestChangeMasterChannel verifies that Client.ChangeMaster (not just the pure

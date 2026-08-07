@@ -129,6 +129,10 @@ func newSingleClusterTopology(mariadb *mariadbv1alpha1.MariaDB, userSqlReconcile
 func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sql.Client) error {
 	r.logger.Info("Configuring primary")
 
+	if err := client.MigrateLegacyReplicationChannel(ctx); err != nil {
+		return fmt.Errorf("error migrating legacy replication channel: %v", err)
+	}
+
 	isReplica, err := client.IsReplicationReplica(ctx, sql.WithConnectionName(ReplicaConnectionName))
 	if err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error checking replica: %v", err)
@@ -172,6 +176,10 @@ func (r *singleClusterTopology) ConfigureReplica(ctx context.Context, client *sq
 	}
 	for _, setOpt := range replicaOpts {
 		setOpt(&opts)
+	}
+
+	if err := client.MigrateLegacyReplicationChannel(ctx); err != nil {
+		return fmt.Errorf("error migrating legacy replication channel: %v", err)
 	}
 
 	if opts.ResetMaster {
@@ -333,6 +341,9 @@ func (m *multiClusterTopology) ConfigureReplica(ctx context.Context, client *sql
 func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, client *sql.Client) error {
 	m.logger.Info("Configuring primary replica")
 
+	if err := client.MigrateLegacyReplicationChannel(ctx); err != nil {
+		return fmt.Errorf("error migrating legacy replication channel: %v", err)
+	}
 	if err := client.StopAllSlaves(ctx); err != nil {
 		return fmt.Errorf("error stopping all slaves: %v", err)
 	}
@@ -410,6 +421,9 @@ func (m *multiClusterTopology) configureSecondaryReplica(ctx context.Context, cl
 		setOpt(&opts)
 	}
 
+	if err := client.MigrateLegacyReplicationChannel(ctx); err != nil {
+		return fmt.Errorf("error migrating legacy replication channel: %v", err)
+	}
 	if err := client.StopAllSlaves(ctx); err != nil {
 		return fmt.Errorf("error stopping all replicas: %v", err)
 	}
