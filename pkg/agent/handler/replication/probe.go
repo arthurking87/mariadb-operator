@@ -43,6 +43,31 @@ func NewReplicationProbe(env *environment.PodEnvironment, k8sClient ctrlclient.C
 	}
 }
 
+// resolveReplicaConnectionOpts determines which replication channel, if any, is currently
+// configured as a replica connection on client: the named channel, or the legacy unnamed
+// channel left over from before named channels were introduced (see
+// sql.Client.MigrateLegacyReplicationChannel). Neither being configured is expected for
+// primaries, so that case is reported as (nil, false, nil) rather than an error.
+func resolveReplicaConnectionOpts(ctx context.Context, client *sql.Client) ([]sql.ReplicationOpt, bool, error) {
+	namedOpts := []sql.ReplicationOpt{sql.WithConnectionName(mdbreplic.ReplicaConnectionName)}
+	isReplica, err := client.IsReplicationReplica(ctx, namedOpts...)
+	if err != nil && !sql.IsConnectionNotExists(err) {
+		return nil, false, err
+	}
+	if isReplica {
+		return namedOpts, true, nil
+	}
+
+	// The named channel isn't configured. Before assuming this node is a primary, check
+	// whether it's still replicating on the legacy unnamed channel, e.g. because the
+	// operator was just upgraded and this pod hasn't gone through migration yet.
+	isLegacyReplica, err := client.IsReplicationReplica(ctx)
+	if err != nil && !sql.IsConnectionNotExists(err) {
+		return nil, false, err
+	}
+	return nil, isLegacyReplica, nil
+}
+
 func (p *ReplicationProbe) Liveness(w http.ResponseWriter, r *http.Request) {
 	p.livenessLogger.V(1).Info("Probe started")
 
@@ -57,14 +82,14 @@ func (p *ReplicationProbe) Liveness(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sqlClient.Close()
 
-	isReplica, err := sqlClient.IsReplicationReplica(sqlCtx, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
-	if err != nil && !sql.IsConnectionNotExists(err) {
+	replOpts, isReplica, err := resolveReplicaConnectionOpts(sqlCtx, sqlClient)
+	if err != nil {
 		p.livenessLogger.Error(err, "error checking replica")
 		p.responseWriter.WriteErrorf(w, "error checking replica: %v", err)
 		return
 	}
 	if isReplica {
-		status, err := sqlClient.ReplicaStatus(sqlCtx, p.livenessLogger, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
+		status, err := sqlClient.ReplicaStatus(sqlCtx, p.livenessLogger, replOpts...)
 		if err != nil {
 			p.livenessLogger.Error(err, "error getting replica status")
 			p.responseWriter.WriteErrorf(w, "error getting replica status: %v", err)
@@ -125,14 +150,14 @@ func (p *ReplicationProbe) Readiness(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sqlClient.Close()
 
-	isReplica, err := sqlClient.IsReplicationReplica(sqlCtx, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
-	if err != nil && !sql.IsConnectionNotExists(err) {
+	replOpts, isReplica, err := resolveReplicaConnectionOpts(sqlCtx, sqlClient)
+	if err != nil {
 		p.readinessLogger.Error(err, "error checking replica")
 		p.responseWriter.WriteErrorf(w, "error checking replica: %v", err)
 		return
 	}
 	if isReplica {
-		status, err := sqlClient.ReplicaStatus(sqlCtx, p.readinessLogger, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
+		status, err := sqlClient.ReplicaStatus(sqlCtx, p.readinessLogger, replOpts...)
 		if err != nil {
 			p.readinessLogger.Error(err, "error getting replica status")
 			p.responseWriter.WriteErrorf(w, "error getting replica status: %v", err)
