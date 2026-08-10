@@ -66,6 +66,7 @@ var (
 	healthAddr  string
 
 	leaderElect                 bool
+	leaderElectionID            string
 	leaderElectionLeaseDuration time.Duration
 	leaderElectionRenewDeadline time.Duration
 	leaderElectionRetryPeriod   time.Duration
@@ -124,6 +125,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&healthAddr, "health-addr", ":8081", "The address the probe endpoint binds to.")
 
 	rootCmd.PersistentFlags().BoolVar(&leaderElect, "leader-elect", false, "Enable leader election for controller manager.")
+	rootCmd.Flags().StringVar(&leaderElectionID, "leader-election-id", "mariadb-operator.mariadb.com",
+		"Leader election ID used to acquire the leader lock. Customize this when running multiple independent "+
+			"operator instances in the same namespace, otherwise they will contend for the same lease.")
 	rootCmd.PersistentFlags().DurationVar(&leaderElectionLeaseDuration, "leader-election-lease-duration", 15*time.Second,
 		"Duration that non-leader candidates will wait to force acquire leadership.")
 	rootCmd.PersistentFlags().DurationVar(&leaderElectionRenewDeadline, "leader-election-renew-deadline", 10*time.Second,
@@ -245,7 +249,7 @@ var rootCmd = &cobra.Command{
 			},
 			HealthProbeBindAddress:        healthAddr,
 			LeaderElection:                leaderElect,
-			LeaderElectionID:              "mariadb-operator.mariadb.com",
+			LeaderElectionID:              leaderElectionID,
 			LeaseDuration:                 &leaderElectionLeaseDuration,
 			RenewDeadline:                 &leaderElectionRenewDeadline,
 			RetryPeriod:                   &leaderElectionRetryPeriod,
@@ -378,6 +382,7 @@ var rootCmd = &cobra.Command{
 			controller.NewPodReplicationController(
 				client,
 				replRecorder,
+				endpointsReconciler,
 			),
 			[]string{
 				metadata.MariadbAnnotation,

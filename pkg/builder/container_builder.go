@@ -63,7 +63,21 @@ var (
 			},
 		}
 	}
+	// defaultMariadbPreStopSleepSeconds gives the endpoint controller time to remove this Pod from
+	// the primary/secondary Service endpoints before mysqld receives SIGTERM, so in-flight connection
+	// attempts routed through the Service right before a switchover/rolling update don't get refused.
+	defaultMariadbPreStopSleepSeconds int64 = 5
 )
+
+func defaultMariadbLifecycle() *corev1.Lifecycle {
+	return &corev1.Lifecycle{
+		PreStop: &corev1.LifecycleHandler{
+			Sleep: &corev1.SleepAction{
+				Seconds: defaultMariadbPreStopSleepSeconds,
+			},
+		},
+	}
+}
 
 func (b *Builder) mariadbContainers(mariadb *mariadbv1alpha1.MariaDB, opts ...mariadbPodOpt) ([]corev1.Container, error) {
 	mariadbOpts := newMariadbPodOpts(opts...)
@@ -110,6 +124,10 @@ func (b *Builder) mariadbContainers(mariadb *mariadbv1alpha1.MariaDB, opts ...ma
 			return nil, err
 		}
 		mariadbContainer.ReadinessProbe = readinessProbe
+	}
+
+	if mariadbContainer.Lifecycle == nil && mariadbOpts.includeLifecycle {
+		mariadbContainer.Lifecycle = defaultMariadbLifecycle()
 	}
 
 	if mariadbOpts.command != nil {

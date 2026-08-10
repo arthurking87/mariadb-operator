@@ -23,6 +23,7 @@ var (
 	renewBeforePercentage                         int32
 	serviceName, serviceNamespace                 string
 	requeueDuration                               time.Duration
+	certControllerLeaderElectionID                string
 )
 
 func init() {
@@ -46,6 +47,10 @@ func init() {
 	certControllerCmd.Flags().StringVar(&serviceNamespace, "service-namespace", "default", "Webhook service namespace")
 	certControllerCmd.Flags().DurationVar(&requeueDuration, "requeue-duration", 5*time.Minute,
 		"Time duration between reconciling webhook config for new certs")
+	certControllerCmd.Flags().StringVar(&certControllerLeaderElectionID, "leader-election-id",
+		"cert-controller.mariadb-operator.mariadb.com",
+		"Leader election ID used to acquire the leader lock. Customize this when running multiple independent "+
+			"operator instances in the same namespace, otherwise they will contend for the same lease.")
 }
 
 var certControllerCmd = &cobra.Command{
@@ -75,7 +80,7 @@ var certControllerCmd = &cobra.Command{
 			},
 			HealthProbeBindAddress:        healthAddr,
 			LeaderElection:                leaderElect,
-			LeaderElectionID:              "cert-controller.mariadb-operator.mariadb.com",
+			LeaderElectionID:              certControllerLeaderElectionID,
 			LeaseDuration:                 &leaderElectionLeaseDuration,
 			RenewDeadline:                 &leaderElectionRenewDeadline,
 			RetryPeriod:                   &leaderElectionRetryPeriod,

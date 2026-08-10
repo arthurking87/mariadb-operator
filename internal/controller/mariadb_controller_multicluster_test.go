@@ -2,7 +2,6 @@ package controller
 
 import (
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
-	replicationctrl "github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
@@ -945,7 +944,7 @@ func testReplicationStatusBuilder(primaryKey, replicaKey types.NamespacedName,
 		By("Ensuring valid primary gtid_current_pos")
 		testGtidCurrentPos(*primaryClient, primaryGtidDomainId)
 		By("Ensuring primary replication running")
-		testReplicationRunning(*primaryClient, nil)
+		testReplicationRunning(*primaryClient, ptr.To(replication.ReplicaConnectionName))
 
 		By("Getting primary replica MariaDB client")
 		Expect(k8sClient.Get(testCtx, replicaKey, &replicaMdb)).To(Succeed())
@@ -959,7 +958,7 @@ func testReplicationStatusBuilder(primaryKey, replicaKey types.NamespacedName,
 		By("Ensuring valid primary replica gtid_current_pos")
 		testGtidCurrentPos(*primaryReplicaClient, primaryGtidDomainId, replicaGtidDomainId)
 		By("Ensuring primary replica replication running")
-		testReplicationRunning(*primaryReplicaClient, &replicationctrl.MultiClusterReplicaConnectionName)
+		testReplicationRunning(*primaryReplicaClient, ptr.To(replication.MultiClusterReplicaConnectionName))
 
 		By("Getting replica MariaDB client")
 		Expect(k8sClient.Get(testCtx, replicaKey, &replicaMdb)).To(Succeed())
@@ -980,7 +979,7 @@ func testReplicationStatusBuilder(primaryKey, replicaKey types.NamespacedName,
 		By("Ensuring valid replica gtid_current_pos")
 		testGtidCurrentPos(*replicaClient, primaryGtidDomainId, replicaGtidDomainId)
 		By("Ensuring replica replication running")
-		testReplicationRunning(*replicaClient, nil)
+		testReplicationRunning(*replicaClient, ptr.To(replication.ReplicaConnectionName))
 	}
 }
 
@@ -999,7 +998,7 @@ func testGaleraReplicationStatusBuilder(replicaKey types.NamespacedName) func() 
 		By("Ensuring valid primary replica gtid_current_pos")
 		testGtidCurrentPos(*primaryReplicaClient, *primaryGaleraGtidDomainId, *replicaGaleraGtidDomainId)
 		By("Ensuring primary replica replication running")
-		testReplicationRunning(*primaryReplicaClient, &replicationctrl.MultiClusterReplicaConnectionName)
+		testReplicationRunning(*primaryReplicaClient, ptr.To(replication.MultiClusterReplicaConnectionName))
 	}
 }
 
@@ -1034,7 +1033,7 @@ func testMultiClusterSwitchoverBuilder(primaryGtidDomainId, replicaGtidDomainId 
 			status, err := replicaClient.ReplicaStatus(
 				testCtx,
 				testLogger,
-				sql.WithConnectionName(replicationctrl.MultiClusterReplicaConnectionName),
+				sql.WithConnectionName(replication.MultiClusterReplicaConnectionName),
 			)
 			g.Expect(err).ToNot(Succeed())
 			g.Expect(status).To(BeNil())
@@ -1061,7 +1060,7 @@ func testMultiClusterSwitchoverBuilder(primaryGtidDomainId, replicaGtidDomainId 
 			status, err := primaryClient.ReplicaStatus(
 				testCtx,
 				testLogger,
-				sql.WithConnectionName(replicationctrl.MultiClusterReplicaConnectionName),
+				sql.WithConnectionName(replication.MultiClusterReplicaConnectionName),
 			)
 			g.Expect(err).To(Succeed())
 			g.Expect(status).ToNot(BeNil())

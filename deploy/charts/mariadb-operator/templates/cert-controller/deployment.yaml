@@ -76,6 +76,7 @@ spec:
             - --log-level={{ .Values.logLevel }}
             {{- if .Values.certController.ha.enabled }}
             - --leader-elect
+            - --leader-election-id={{ .Values.certController.leaderElectionID | default (printf "%s-cert-controller.mariadb-operator.mariadb.com" (include "mariadb-operator.fullname" .)) }}
             {{- end }}
             {{- range .Values.certController.extraArgs }}
             - {{ . }}
