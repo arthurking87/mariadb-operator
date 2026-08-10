@@ -284,16 +284,24 @@ func findCondition(conditions []metav1.Condition, condType string) *metav1.Condi
 
 // TestSwitchoverPhase_HasNoPerPhaseTimeoutField pins the removal of switchoverPhase.timeout (and
 // therefore of the per-phase context.WithTimeout wrapping that was keyed off it) done in commit
-// 8d623a58. It passes only while the type carries no such field; reintroducing a per-phase
-// timeout field must come with a conscious update to this test, not sneak back in silently.
+// 8d623a58. It passes only while the type carries no such field (or any other field outside this
+// allow-list, which issue #80's rollback-on-failure fix added); reintroducing a per-phase timeout
+// field must come with a conscious update to this test, not sneak back in silently.
 func TestSwitchoverPhase_HasNoPerPhaseTimeoutField(t *testing.T) {
+	allowedFields := map[string]bool{
+		"name":              true,
+		"reconcile":         true,
+		"afterSuccess":      true,
+		"resumePoint":       true,
+		"rollbackOnFailure": true,
+	}
 	typ := reflect.TypeOf(switchoverPhase{})
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
-		if name != "name" && name != "reconcile" {
-			t.Fatalf("switchoverPhase has unexpected field %q (fields: name, reconcile expected); "+
-				"if this is a reintroduced per-phase timeout, SwitchoverTimeout must remain scoped to "+
-				"the %q phase only per issue #64's follow-up fix", name, waitSyncPhaseName)
+		if !allowedFields[name] {
+			t.Fatalf("switchoverPhase has unexpected field %q (allowed: name, reconcile, afterSuccess, "+
+				"resumePoint, rollbackOnFailure); if this is a reintroduced per-phase timeout, SwitchoverTimeout "+
+				"must remain scoped to the %q phase only per issue #64's follow-up fix", name, waitSyncPhaseName)
 		}
 	}
 }
