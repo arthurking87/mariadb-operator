@@ -249,10 +249,6 @@ func (r *ReplicationReconciler) waitForReplicaSync(ctx context.Context, req *Rec
 	if req.mariadb.Status.CurrentPrimaryPodIndex == nil {
 		return errors.New("'status.currentPrimaryPodIndex' must be set")
 	}
-	if !req.currentPrimaryReady {
-		logger.Info("Skipped waiting for replicas to be synced with primary due to primary's non ready status")
-		return nil
-	}
 
 	primaryClient, err := req.replClientSet.currentPrimaryClient(ctx)
 	if err != nil {
@@ -390,13 +386,11 @@ func (r *ReplicationReconciler) connectReplicasToNewPrimary(ctx context.Context,
 		return fmt.Errorf("error getting replica options: %v", err)
 	}
 
-	replicationPrimaryPodIndex := ptr.Deref(req.mariadb.Spec.Replication, mariadbv1alpha1.Replication{}).Primary.PodIndex
-
 	g := new(errgroup.Group)
 	g.SetLimit(int(req.mariadb.Spec.Replicas))
 
 	for i := 0; i < int(req.mariadb.Spec.Replicas); i++ {
-		if i == *req.mariadb.Status.CurrentPrimaryPodIndex || i == *replicationPrimaryPodIndex {
+		if i == *req.mariadb.Status.CurrentPrimaryPodIndex || i == newPrimary {
 			continue
 		}
 		g.Go(func() error {
@@ -406,11 +400,11 @@ func (r *ReplicationReconciler) connectReplicasToNewPrimary(ctx context.Context,
 			}
 			var pod corev1.Pod
 			if err := r.Get(ctx, key, &pod); err != nil {
-				logger.V(1).Info("Error getting Pod when connecting replicas to new primary", "pod", key.Name)
 				if apierrors.IsNotFound(err) {
+					logger.V(1).Info("Pod not found when connecting replicas to new primary, skipping", "pod", key.Name)
 					return nil
 				}
-				return fmt.Errorf("error getting pod: %w", err)
+				return fmt.Errorf("error getting pod '%s': %w", key.Name, err)
 			}
 			if !mariadbpod.PodReady(&pod) {
 				logger.V(1).Info("Skipping non ready Pod when connecting replicas to new primary", "pod", key.Name)
