@@ -4948,6 +4948,15 @@ spec:
                           node. The user may change this field to perform a manual
                           switchover.
                         type: integer
+                      switchoverTimeout:
+                        description: |-
+                          SwitchoverTimeout is the maximum cumulative duration allowed for the "wait for replica sync" phase
+                          of a switchover/failover to keep retrying, across reconciles, before giving up. It does not cover
+                          the other phases (locking the primary, promoting the new primary...), which have their own fixed
+                          per-attempt timeout instead. If this timeout is exceeded, the operator aborts the operation: it
+                          unlocks the primary, disables read_only, and reverts the desired primary back to the current one.
+                          It defaults to 60s.
+                        type: string
                     type: object
                   replica:
                     description: ReplicaReplication is the replication configuration

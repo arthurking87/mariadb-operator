@@ -34,3 +34,35 @@ func SetPrimarySwitched(c Conditioner) {
 		Message: "Switchover complete",
 	})
 }
+
+func SetPrimarySwitchoverTimeout(c Conditioner, elapsed string) {
+	c.SetCondition(metav1.Condition{
+		Type:    mariadbv1alpha1.ConditionTypePrimarySwitched,
+		Status:  metav1.ConditionTrue,
+		Reason:  mariadbv1alpha1.ConditionReasonSwitchoverTimeout,
+		Message: fmt.Sprintf("Switchover timed out after %s, reverted to previous primary", elapsed),
+	})
+}
+
+// SetReplicationSyncing marks the Wait sync switchover phase as failing/retrying. Calling this
+// repeatedly across retries is a no-op status-wise (LastTransitionTime only moves on the first
+// call), which is what lets the cumulative Wait sync retry clock be derived from it.
+func SetReplicationSyncing(c Conditioner) {
+	c.SetCondition(metav1.Condition{
+		Type:    mariadbv1alpha1.ConditionTypeReplicationSyncing,
+		Status:  metav1.ConditionFalse,
+		Reason:  mariadbv1alpha1.ConditionReasonReplicationSyncing,
+		Message: "Waiting for replicas to sync with primary during switchover",
+	})
+}
+
+// SetReplicationSynced clears the Wait sync retry clock: called when the Wait sync phase
+// succeeds, and when a switchover is aborted or reset, so the next attempt starts fresh.
+func SetReplicationSynced(c Conditioner) {
+	c.SetCondition(metav1.Condition{
+		Type:    mariadbv1alpha1.ConditionTypeReplicationSyncing,
+		Status:  metav1.ConditionTrue,
+		Reason:  mariadbv1alpha1.ConditionReasonReplicationSynced,
+		Message: "Replicas synced with primary",
+	})
+}
