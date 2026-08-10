@@ -148,7 +148,10 @@ func (wr *wrappedUserReconciler) Reconcile(ctx context.Context, mdbClient *sqlCl
 		if err := mdbClient.CreateUser(ctx, accountName, createUserOpts...); err != nil {
 			return fmt.Errorf("error creating User: %v", err)
 		}
-	} else if password != "" || passwordHash != "" || passwordVia != "" {
+	} else {
+		// Always reconcile the existing account, not just when a password/credential field is
+		// also set. Otherwise, spec changes such as MaxUserConnections or TLS requirements are
+		// silently never applied to accounts that don't configure a password secret.
 		if err := mdbClient.AlterUser(ctx, accountName, createUserOpts...); err != nil {
 			return fmt.Errorf("error altering User: %v", err)
 		}
