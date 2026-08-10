@@ -566,6 +566,12 @@ type ReplicationStatus struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=status
 	Roles map[string]ReplicationRole `json:"roles,omitempty"`
+	// ConfigHashes is the hash of the replication configuration that has been applied to each Pod.
+	// It is used to detect spec changes and reapply the replication configuration even when the
+	// replication role of the Pod has not changed.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=status
+	ConfigHashes map[string]string `json:"configHashes,omitempty"`
 	// Replicas is the observed replication status for each replica.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=status
