@@ -72,8 +72,13 @@ func (maxConnsRecordingDriver) Open(name string) (driver.Conn, error) {
 
 type maxConnsRecordingConnector struct{ conn *maxConnsRecordingConn }
 
-func (c *maxConnsRecordingConnector) Connect(ctx context.Context) (driver.Conn, error) { return c.conn, nil }
-func (c *maxConnsRecordingConnector) Driver() driver.Driver                            { return maxConnsRecordingDriver{} }
+func (c *maxConnsRecordingConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	return c.conn, nil
+}
+
+func (c *maxConnsRecordingConnector) Driver() driver.Driver {
+	return maxConnsRecordingDriver{}
+}
 
 // TestReconcileAppliesMaxUserConnectionsWithoutPassword is a regression test for
 // https://github.com/mariadb-operator/mariadb-operator/issues/34: wrappedUserReconciler.Reconcile
