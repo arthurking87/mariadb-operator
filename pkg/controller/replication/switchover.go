@@ -13,6 +13,7 @@ import (
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metrics"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
+	mdbreplic "github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/wait"
@@ -321,8 +322,11 @@ func (r *ReplicationReconciler) waitForNewPrimarySync(ctx context.Context, req *
 	defer cancel()
 
 	if err := wait.PollUntilSuccessOrContextCancel(syncCtx, logger, func(ctx context.Context) error {
-		status, err := newPrimaryClient.ReplicaStatus(ctx, logger)
+		status, err := newPrimaryClient.ReplicaStatus(ctx, logger, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
 		if err != nil {
+			if sql.IsConnectionNotExists(err) {
+				return errors.New("replication channel not configured yet on new primary")
+			}
 			return fmt.Errorf("error getting new primary status: %v", err)
 		}
 		gtidDomainId, err := newPrimaryClient.GtidDomainId(ctx)
