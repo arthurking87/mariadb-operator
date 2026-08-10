@@ -2553,6 +2553,7 @@ _Appears in:_
 | `podIndex` _integer_ | PodIndex is the StatefulSet index of the primary node. The user may change this field to perform a manual switchover. |  |  |
 | `autoFailover` _boolean_ | AutoFailover indicates whether the operator should automatically update PodIndex to perform an automatic primary failover.<br />It is enabled by default. |  |  |
 | `autoFailoverDelay` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#duration-v1-meta)_ | AutoFailoverDelay indicates the duration before performing an automatic primary failover.<br />By default, no extra delay is added. |  |  |
+| `switchoverTimeout` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#duration-v1-meta)_ | SwitchoverTimeout is the maximum cumulative duration allowed for the "wait for replica sync" phase<br />of a switchover/failover to keep retrying, across reconciles, before giving up. It does not cover<br />the other phases (locking the primary, promoting the new primary...), which have their own fixed<br />per-attempt timeout instead. If this timeout is exceeded, the operator aborts the operation: it<br />unlocks the primary, disables read_only, and reverts the desired primary back to the current one.<br />It defaults to 60s. |  |  |
 
 
 #### Probe

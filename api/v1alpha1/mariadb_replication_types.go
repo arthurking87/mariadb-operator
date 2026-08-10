@@ -97,6 +97,15 @@ type PrimaryReplication struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	AutoFailoverDelay *metav1.Duration `json:"autoFailoverDelay,omitempty"`
+	// SwitchoverTimeout is the maximum cumulative duration allowed for the "wait for replica sync" phase
+	// of a switchover/failover to keep retrying, across reconciles, before giving up. It does not cover
+	// the other phases (locking the primary, promoting the new primary...), which have their own fixed
+	// per-attempt timeout instead. If this timeout is exceeded, the operator aborts the operation: it
+	// unlocks the primary, disables read_only, and reverts the desired primary back to the current one.
+	// It defaults to 60s.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SwitchoverTimeout *metav1.Duration `json:"switchoverTimeout,omitempty"`
 }
 
 // SetDefaults fills the current PrimaryReplication object with DefaultReplicationSpec.
@@ -110,6 +119,9 @@ func (r *PrimaryReplication) SetDefaults() {
 	}
 	if r.AutoFailoverDelay == nil {
 		r.AutoFailoverDelay = ptr.To(metav1.Duration{})
+	}
+	if r.SwitchoverTimeout == nil {
+		r.SwitchoverTimeout = ptr.To(metav1.Duration{Duration: 60 * time.Second})
 	}
 }
 

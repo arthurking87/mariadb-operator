@@ -392,6 +392,13 @@ func (r *ReplicationReconciler) patchStatus(ctx context.Context, mariadb *mariad
 	return r.Status().Patch(ctx, mariadb, patch)
 }
 
+func (r *ReplicationReconciler) patch(ctx context.Context, mariadb *mariadbv1alpha1.MariaDB,
+	patcher func(*mariadbv1alpha1.MariaDB)) error {
+	patch := client.MergeFrom(mariadb.DeepCopy())
+	patcher(mariadb)
+	return r.Patch(ctx, mariadb, patch)
+}
+
 func shouldSkipPrimaryReconciliation(mariadb *mariadbv1alpha1.MariaDB, replRoles map[string]mariadbv1alpha1.ReplicationRole,
 	pod string, logger logr.Logger) bool {
 	role, ok := replRoles[pod]

@@ -72,13 +72,13 @@ func (r *MariaDBReconciler) resetPrimaryReplicaConnection(ctx context.Context, m
 		}
 		if err := client.StopSlave(
 			ctx,
-			sql.WithConnectionName(replicationctrl.MultiClusterReplicaConnectionName),
+			sql.WithConnectionName(replication.MultiClusterReplicaConnectionName),
 		); err != nil && !sql.IsConnectionNotExists(err) {
 			return fmt.Errorf("error stopping primary replica connection in Pod index %d: %v", i, err)
 		}
 		if err := client.ResetSlave(
 			ctx,
-			sql.WithConnectionName(replicationctrl.MultiClusterReplicaConnectionName),
+			sql.WithConnectionName(replication.MultiClusterReplicaConnectionName),
 		); err != nil && !sql.IsConnectionNotExists(err) {
 			return fmt.Errorf("error resetting primary replica connection in Pod index %d: %v", i, err)
 		}
@@ -238,13 +238,13 @@ func (r *MariaDBReconciler) reconfigureReplicaClusterGtids(ctx context.Context, 
 		return fmt.Errorf("error composing GTIDs: %v", err)
 	}
 
-	if err := primaryClient.StopSlave(ctx, sql.WithConnectionName(replicationctrl.MultiClusterReplicaConnectionName)); err != nil {
+	if err := primaryClient.StopSlave(ctx, sql.WithConnectionName(replication.MultiClusterReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error stopping primary replica: %v", err)
 	}
 	if err := primaryClient.SetGtidSlavePos(ctx, composedGtid); err != nil {
 		return fmt.Errorf("error setting gtid_slave_pos %s in primary replica: %v", composedGtid, err)
 	}
-	if err := primaryClient.StartSlave(ctx, sql.WithConnectionName(replicationctrl.MultiClusterReplicaConnectionName)); err != nil {
+	if err := primaryClient.StartSlave(ctx, sql.WithConnectionName(replication.MultiClusterReplicaConnectionName)); err != nil {
 		return fmt.Errorf("error starting primary replica: %v", err)
 	}
 	return nil

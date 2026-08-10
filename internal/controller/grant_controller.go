@@ -85,6 +85,9 @@ func newWrappedGrantReconciler(client client.Client, refResolver refresolver.Ref
 
 func (wr *wrappedGrantReconciler) Reconcile(ctx context.Context, mdbClient *sqlClient.Client) error {
 	var opts []sqlClient.GrantOption
+	if wr.grant.Spec.GrantOption {
+		opts = append(opts, sqlClient.WithGrantOption())
+	}
 
 	if wr.grant.Status.CurrentPrivileges != nil {
 		if revokePrivileges := wr.privilegesToRevoke(); len(revokePrivileges) > 0 {
@@ -101,9 +104,6 @@ func (wr *wrappedGrantReconciler) Reconcile(ctx context.Context, mdbClient *sqlC
 		}
 	}
 
-	if wr.grant.Spec.GrantOption {
-		opts = append(opts, sqlClient.WithGrantOption())
-	}
 	if err := mdbClient.Grant(
 		ctx,
 		wr.grant.Spec.Privileges,
