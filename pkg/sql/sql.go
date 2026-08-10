@@ -700,7 +700,7 @@ func (c *Client) SystemVariable(ctx context.Context, variable string) (string, e
 
 	var val string
 	if err := row.Scan(&val); err != nil {
-		return "", nil
+		return "", err
 	}
 	return val, nil
 }
@@ -813,6 +813,35 @@ func (c *Client) ResetReplica(ctx context.Context, replOpts ...ReplicationOpt) e
 		return nil
 	}
 	return c.Exec(ctx, fmt.Sprintf("RESET REPLICA %s ALL;", opts.ConnectionName))
+}
+
+// MigrateLegacyReplicationChannel removes a pre-existing replication connection on
+// MariaDB's default/unnamed channel, if one exists.
+//
+// Clusters reconciled before the named replication channels ("mariadb-operator",
+// "multi-cluster") were introduced have their replica connection configured on this
+// unnamed channel. Leaving it in place causes a subsequent CHANGE MASTER '<name>' TO ...
+// against the same primary host:port to fail with Error 1934 (connection conflicts with
+// existing connection), since MariaDB does not allow two connections pointing at the same
+// master. This is a no-op on servers that never had the unnamed channel configured.
+func (c *Client) MigrateLegacyReplicationChannel(ctx context.Context) error {
+	isLegacyReplica, err := c.IsReplicationReplica(ctx)
+	if err != nil {
+		if IsConnectionNotExists(err) {
+			return nil
+		}
+		return fmt.Errorf("error checking legacy replication channel: %v", err)
+	}
+	if !isLegacyReplica {
+		return nil
+	}
+	if err := c.StopSlave(ctx); err != nil && !IsConnectionNotExists(err) {
+		return fmt.Errorf("error stopping legacy replication channel: %v", err)
+	}
+	if err := c.ResetSlave(ctx); err != nil && !IsConnectionNotExists(err) {
+		return fmt.Errorf("error resetting legacy replication channel: %v", err)
+	}
+	return nil
 }
 
 func (c *Client) WaitForReplicaGtid(ctx context.Context, gtid string, timeout time.Duration) error {
