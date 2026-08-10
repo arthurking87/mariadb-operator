@@ -13,6 +13,7 @@ import (
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metrics"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
+	mdbreplic "github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/wait"
@@ -54,6 +55,10 @@ type switchoverPhase struct {
 	// access too would risk a dual-writable cluster — later phases must not roll back.
 	rollbackOnFailure bool
 }
+
+// waitSyncPhaseName identifies the "Wait sync" phase, whose cumulative retry time across
+// reconciles is bounded by replication.Primary.SwitchoverTimeout, independently of the other phases.
+const waitSyncPhaseName = "Wait sync"
 
 func isSwitchoverStale(mdb *mariadbv1alpha1.MariaDB) bool {
 	return mdb.IsSwitchingPrimary() && !mdb.IsReplicationSwitchoverRequired()
@@ -109,7 +114,7 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			rollbackOnFailure: true,
 		},
 		{
-			name:              "Wait sync",
+			name:              waitSyncPhaseName,
 			reconcile:         r.waitSync,
 			rollbackOnFailure: true,
 		},
@@ -191,9 +196,11 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 				recordSwitchoverResult(ns, mdbName, fromIndex, toIndex, switchoverStart, metricResultFailure)
 				return phaseErr
 			}
-			// A failure before the new primary is configured (most commonly "Wait sync"
-			// timing out on a lagging replica) would otherwise leave the primary locked +
-			// read-only indefinitely: isSwitchoverStale() doesn't catch this, because the
+			if p.name == waitSyncPhaseName {
+				return r.handleWaitSyncFailure(ctx, req, logger, replication, phaseErr)
+			}
+			// A failure before the new primary is configured would otherwise leave the primary
+			// locked + read-only indefinitely: isSwitchoverStale() doesn't catch this, because the
 			// switchover is still "required" from the spec's point of view
 			// (status.currentPrimaryPodIndex was never updated), so the next
 			// reconcile just retries the same phases from "Lock primary with
@@ -214,6 +221,13 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 		if p.afterSuccess != nil {
 			if err := p.afterSuccess(ctx, req, logger.WithValues("phase", p.name)); err != nil {
 				return fmt.Errorf("error finalizing %s switchover reconcile phase: %v", p.name, err)
+			}
+		}
+		if p.name == waitSyncPhaseName {
+			if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+				condition.SetReplicationSynced(&req.mariadb.Status)
+			}); err != nil {
+				return fmt.Errorf("error patching MariaDB status: %v", err)
 			}
 		}
 	}
@@ -289,6 +303,93 @@ func (r *ReplicationReconciler) rollbackSwitchover(ctx context.Context, req *Rec
 	return nil
 }
 
+// waitSyncTimedOut returns the elapsed time since the "Wait sync" phase first started failing in
+// the current switchover attempt, and whether it exceeds replication.Primary.SwitchoverTimeout.
+// The start time is derived from the ConditionTypeReplicationSyncing condition, which is only set
+// to False once, on the first Wait sync failure, and stays False across retries until Wait sync
+// succeeds or the switchover is aborted/reset (meta.SetStatusCondition only moves LastTransitionTime
+// when Status actually changes). This bounds cumulative Wait sync retry time only, not the other
+// switchover phases, which are bounded individually by otherPhaseTimeout instead.
+func (r *ReplicationReconciler) waitSyncTimedOut(mdb *mariadbv1alpha1.MariaDB,
+	replication mariadbv1alpha1.Replication) (time.Duration, bool) {
+	cond := meta.FindStatusCondition(mdb.Status.Conditions, mariadbv1alpha1.ConditionTypeReplicationSyncing)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		return 0, false
+	}
+	timeout := ptr.Deref(replication.Primary.SwitchoverTimeout, metav1.Duration{Duration: 60 * time.Second}).Duration
+	if timeout <= 0 {
+		return 0, false
+	}
+	elapsed := time.Since(cond.LastTransitionTime.Time)
+	return elapsed, elapsed > timeout
+}
+
+// handleWaitSyncFailure is called whenever the "Wait sync" phase fails. It records the failure via
+// ConditionTypeReplicationSyncing (a no-op on retries after the first), rolls back the primary's
+// read lock/read-only state (see rollbackSwitchover — "Wait sync" always runs before "Configure
+// new primary" makes the new primary writable, so this is always safe here) so the cluster isn't
+// stuck rejecting writes while retries wait for replicas to catch up, and, once the cumulative
+// retry time exceeds replication.Primary.SwitchoverTimeout, aborts the switchover instead of
+// propagating the raw error.
+func (r *ReplicationReconciler) handleWaitSyncFailure(ctx context.Context, req *ReconcileRequest, logger logr.Logger,
+	replication mariadbv1alpha1.Replication, waitSyncErr error) error {
+	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		condition.SetReplicationSyncing(&req.mariadb.Status)
+	}); err != nil {
+		return fmt.Errorf("error patching MariaDB status: %v", err)
+	}
+	if rollbackErr := r.rollbackSwitchover(ctx, req, logger, true); rollbackErr != nil {
+		logger.Error(rollbackErr, "error rolling back switchover after failed phase", "phase", waitSyncPhaseName)
+	}
+	if elapsed, timedOut := r.waitSyncTimedOut(req.mariadb, replication); timedOut {
+		return r.abortSwitchover(ctx, req, logger, elapsed)
+	}
+	return fmt.Errorf("error in %s switchover reconcile phase: %v", waitSyncPhaseName, waitSyncErr)
+}
+
+// abortSwitchover gives up an in-progress switchover/failover that has exceeded its timeout.
+// It restores the primary to a writable state (best-effort: handleWaitSyncFailure's rollbackSwitchover
+// call above already does this via the session-scoped lock, so UnlockTables here is normally a no-op)
+// and reverts the desired primary back to the current one, so that IsReplicationSwitchoverRequired()
+// stops triggering retries.
+func (r *ReplicationReconciler) abortSwitchover(ctx context.Context, req *ReconcileRequest, logger logr.Logger,
+	elapsed time.Duration) error {
+	logger.Info("Switchover timed out, aborting", "elapsed", elapsed)
+
+	if req.currentPrimaryReady {
+		client, err := req.replClientSet.currentPrimaryClient(ctx)
+		if err != nil {
+			return fmt.Errorf("error getting current primary client: %v", err)
+		}
+		if err := client.UnlockTables(ctx); err != nil {
+			return fmt.Errorf("error unlocking primary: %v", err)
+		}
+		if err := client.DisableReadOnly(ctx); err != nil {
+			return fmt.Errorf("error disabling readonly in primary: %v", err)
+		}
+	}
+
+	if err := r.patch(ctx, req.mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
+		// Copy the value rather than aliasing the pointer: Spec and Status must not share the same *int.
+		mdb.Spec.Replication.Primary.PodIndex = ptr.To(*mdb.Status.CurrentPrimaryPodIndex)
+	}); err != nil {
+		return fmt.Errorf("error reverting desired primary: %v", err)
+	}
+
+	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		condition.SetPrimarySwitchoverTimeout(&req.mariadb.Status, elapsed.String())
+		condition.SetReplicationSynced(&req.mariadb.Status)
+	}); err != nil {
+		return fmt.Errorf("error patching MariaDB status: %v", err)
+	}
+
+	logger.Info("Switchover aborted")
+	r.recorder.Eventf(req.mariadb, nil, corev1.EventTypeWarning, mariadbv1alpha1.ReasonReplicationSwitchoverTimeout,
+		mariadbv1alpha1.ActionReconciling, "Switchover timed out after %s, reverted to primary at index '%d'",
+		elapsed, *req.mariadb.Status.CurrentPrimaryPodIndex)
+	return nil
+}
+
 func (r *ReplicationReconciler) reconcileStaleSwitchover(ctx context.Context, req *ReconcileRequest,
 	logger logr.Logger) error {
 	if !isSwitchoverStale(req.mariadb) {
@@ -315,6 +416,7 @@ func (r *ReplicationReconciler) reconcileStaleSwitchover(ctx context.Context, re
 
 	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
 		condition.SetPrimarySwitched(&req.mariadb.Status)
+		condition.SetReplicationSynced(&req.mariadb.Status)
 	}); err != nil {
 		return fmt.Errorf("error patching MariaDB status: %v", err)
 	}
@@ -372,10 +474,6 @@ func (r *ReplicationReconciler) waitSync(ctx context.Context, req *ReconcileRequ
 func (r *ReplicationReconciler) waitForReplicaSync(ctx context.Context, req *ReconcileRequest, logger logr.Logger) error {
 	if req.mariadb.Status.CurrentPrimaryPodIndex == nil {
 		return errors.New("'status.currentPrimaryPodIndex' must be set")
-	}
-	if !req.currentPrimaryReady {
-		logger.Info("Skipped waiting for replicas to be synced with primary due to primary's non ready status")
-		return nil
 	}
 
 	primaryClient, err := req.replClientSet.currentPrimaryClient(ctx)
@@ -446,8 +544,11 @@ func (r *ReplicationReconciler) waitForNewPrimarySync(ctx context.Context, req *
 	defer cancel()
 
 	if err := wait.PollUntilSuccessOrContextCancel(syncCtx, logger, func(ctx context.Context) error {
-		status, err := newPrimaryClient.ReplicaStatus(ctx, logger)
+		status, err := newPrimaryClient.ReplicaStatus(ctx, logger, sql.WithConnectionName(mdbreplic.ReplicaConnectionName))
 		if err != nil {
+			if sql.IsConnectionNotExists(err) {
+				return errors.New("replication channel not configured yet on new primary")
+			}
 			return fmt.Errorf("error getting new primary status: %v", err)
 		}
 		gtidDomainId, err := newPrimaryClient.GtidDomainId(ctx)
@@ -511,13 +612,11 @@ func (r *ReplicationReconciler) connectReplicasToNewPrimary(ctx context.Context,
 		return fmt.Errorf("error getting replica options: %v", err)
 	}
 
-	replicationPrimaryPodIndex := ptr.Deref(req.mariadb.Spec.Replication, mariadbv1alpha1.Replication{}).Primary.PodIndex
-
 	g := new(errgroup.Group)
 	g.SetLimit(int(req.mariadb.Spec.Replicas))
 
 	for i := 0; i < int(req.mariadb.Spec.Replicas); i++ {
-		if i == *req.mariadb.Status.CurrentPrimaryPodIndex || i == *replicationPrimaryPodIndex {
+		if i == *req.mariadb.Status.CurrentPrimaryPodIndex || i == newPrimary {
 			continue
 		}
 		g.Go(func() error {
@@ -527,11 +626,11 @@ func (r *ReplicationReconciler) connectReplicasToNewPrimary(ctx context.Context,
 			}
 			var pod corev1.Pod
 			if err := r.Get(ctx, key, &pod); err != nil {
-				logger.V(1).Info("Error getting Pod when connecting replicas to new primary", "pod", key.Name)
 				if apierrors.IsNotFound(err) {
+					logger.V(1).Info("Pod not found when connecting replicas to new primary, skipping", "pod", key.Name)
 					return nil
 				}
-				return fmt.Errorf("error getting pod: %w", err)
+				return fmt.Errorf("error getting pod '%s': %w", key.Name, err)
 			}
 			if !mariadbpod.PodReady(&pod) {
 				logger.V(1).Info("Skipping non ready Pod when connecting replicas to new primary", "pod", key.Name)

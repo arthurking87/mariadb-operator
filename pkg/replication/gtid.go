@@ -133,15 +133,15 @@ func ParseGtidWithDomainId(rawGtid string, domainId uint32, logger logr.Logger) 
 	parts := strings.Split(rawGtid, ",")
 
 	for _, part := range parts {
-		rawGtid = strings.TrimSpace(part)
-		if part == "" {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
 			logger.Info("Ignoring empty GTID")
 			continue
 		}
 
-		gtid, err := ParseGtid(rawGtid)
+		gtid, err := ParseGtid(trimmed)
 		if err != nil {
-			logger.Error(err, "Error parsing GTID", "gtid", rawGtid)
+			logger.Error(err, "Error parsing GTID", "gtid", trimmed)
 			continue
 		}
 		if gtid.DomainID == domainId {

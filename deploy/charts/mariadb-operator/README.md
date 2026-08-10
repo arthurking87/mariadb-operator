@@ -36,6 +36,7 @@ Refer to the [helm documentation](https://github.com/mariadb-operator/mariadb-op
 | certController.image.repository | string | `"ghcr.io/mariadb-operator/mariadb-operator"` |  |
 | certController.image.tag | string | `""` | Image tag to use. By default the chart appVersion is used |
 | certController.imagePullSecrets | list | `[]` |  |
+| certController.leaderElectionID | string | `""` | Leader election ID used to acquire the leader lock. Only takes effect when `certController.ha.enabled` is true. If not set, it defaults to a value scoped to the release name, so multiple releases in the same namespace don't contend for the same lease. Set this explicitly if you need a stable, predictable value. |
 | certController.nodeSelector | object | `{}` | Node selectors to add to cert-controller container |
 | certController.pdb.enabled | bool | `false` | Enable PodDisruptionBudget for the cert-controller. |
 | certController.pdb.maxUnavailable | int | `1` | Maximum number of unavailable Pods. You may also give a percentage, like `50%` |
@@ -85,6 +86,7 @@ Refer to the [helm documentation](https://github.com/mariadb-operator/mariadb-op
 | image.repository | string | `"ghcr.io/mariadb-operator/mariadb-operator"` |  |
 | image.tag | string | `""` | Image tag to use. By default the chart appVersion is used |
 | imagePullSecrets | list | `[]` |  |
+| leaderElectionID | string | `""` | Leader election ID used to acquire the leader lock. Only takes effect when `ha.enabled` is true. If not set, it defaults to a value scoped to the release name, so multiple releases in the same namespace don't contend for the same lease. Set this explicitly if you need a stable, predictable value. |
 | logLevel | string | `"INFO"` | Controller log level |
 | metrics.enabled | bool | `false` | Enable operator internal metrics. Prometheus must be installed in the cluster |
 | metrics.serviceMonitor.additionalLabels | object | `{}` | Labels to be added to the controller ServiceMonitor |

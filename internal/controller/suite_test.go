@@ -187,6 +187,7 @@ var _ = BeforeSuite(func() {
 		NewPodReplicationController(
 			client,
 			replRecorder,
+			endpointsReconciler,
 		),
 		[]string{
 			metadata.MariadbAnnotation,
