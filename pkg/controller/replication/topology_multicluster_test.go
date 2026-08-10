@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
+	mdbreplic "github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	sqlClient "github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -237,7 +238,7 @@ func ptrTo[T any](v T) *T { return &v }
 // connection behave incorrectly. The fix resets the remote connection first, tolerating
 // the case where it doesn't exist yet (SQL error 1617).
 func TestConfigurePrimaryReplicaResetsMultiClusterConnection(t *testing.T) {
-	remoteResetQuery := fmt.Sprintf("RESET SLAVE '%s' ALL;", MultiClusterReplicaConnectionName)
+	remoteResetQuery := fmt.Sprintf("RESET SLAVE '%s' ALL;", mdbreplic.MultiClusterReplicaConnectionName)
 	localResetQuery := "RESET SLAVE  ALL;"
 
 	tests := []struct {
@@ -256,7 +257,7 @@ func TestConfigurePrimaryReplicaResetsMultiClusterConnection(t *testing.T) {
 			// specifically for the remote RESET SLAVE, e.g. on first-time setup.
 			// configurePrimaryReplica must swallow this specific error and continue.
 			execErr: func(query string) error {
-				if strings.HasPrefix(query, "RESET SLAVE") && strings.Contains(query, "'"+MultiClusterReplicaConnectionName+"'") {
+				if strings.HasPrefix(query, "RESET SLAVE") && strings.Contains(query, "'"+mdbreplic.MultiClusterReplicaConnectionName+"'") {
 					return errors.New("Error 1617 (HY000): There is no master connection 'multi-cluster'")
 				}
 				return nil
