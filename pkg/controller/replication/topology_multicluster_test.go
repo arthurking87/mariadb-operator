@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
+	mdbreplic "github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	sqlClient "github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,11 +23,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// recordingConn is a minimal database/sql/driver.Conn that records every executed
+// multiClusterRecordingConn is a minimal database/sql/driver.Conn that records every executed
 // statement instead of talking to a real MariaDB server. It also answers queries
 // (e.g. the "does this user exist" check performed while reconciling the repl user)
 // so that the full configurePrimaryReplica flow can run end-to-end in a unit test.
-type recordingConn struct {
+type multiClusterRecordingConn struct {
 	mu    sync.Mutex
 	execs []string
 	// execErr, when non-nil, is consulted for every executed statement and lets a
@@ -35,17 +36,17 @@ type recordingConn struct {
 	execErr func(query string) error
 }
 
-func (c *recordingConn) Prepare(query string) (driver.Stmt, error) {
-	return nil, errors.New("recordingConn: Prepare not supported, use ExecContext/QueryContext")
+func (c *multiClusterRecordingConn) Prepare(query string) (driver.Stmt, error) {
+	return nil, errors.New("multiClusterRecordingConn: Prepare not supported, use ExecContext/QueryContext")
 }
 
-func (c *recordingConn) Close() error { return nil }
+func (c *multiClusterRecordingConn) Close() error { return nil }
 
-func (c *recordingConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("recordingConn: Begin not supported")
+func (c *multiClusterRecordingConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("multiClusterRecordingConn: Begin not supported")
 }
 
-func (c *recordingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+func (c *multiClusterRecordingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.mu.Lock()
 	c.execs = append(c.execs, query)
 	execErr := c.execErr
@@ -62,11 +63,11 @@ func (c *recordingConn) ExecContext(ctx context.Context, query string, args []dr
 // QueryContext always reports zero matching rows (e.g. "SELECT COUNT(*) ... = 0"),
 // which is enough for the repl user reconciliation performed as part of
 // configurePrimaryReplica (it takes the "user does not exist yet" branch).
-func (c *recordingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *multiClusterRecordingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	return &singleIntRow{value: 0}, nil
 }
 
-func (c *recordingConn) execsSnapshot() []string {
+func (c *multiClusterRecordingConn) execsSnapshot() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.execs...)
@@ -90,29 +91,29 @@ func (r *singleIntRow) Next(dest []driver.Value) error {
 	return nil
 }
 
-type recordingDriver struct{}
+type multiClusterRecordingDriver struct{}
 
-func (recordingDriver) Open(name string) (driver.Conn, error) {
-	return nil, errors.New("recordingDriver: Open not supported, use recordingConnector")
+func (multiClusterRecordingDriver) Open(name string) (driver.Conn, error) {
+	return nil, errors.New("multiClusterRecordingDriver: Open not supported, use multiClusterRecordingConnector")
 }
 
-type recordingConnector struct {
-	conn *recordingConn
+type multiClusterRecordingConnector struct {
+	conn *multiClusterRecordingConn
 }
 
-func (c *recordingConnector) Connect(ctx context.Context) (driver.Conn, error) {
+func (c *multiClusterRecordingConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	return c.conn, nil
 }
 
-func (c *recordingConnector) Driver() driver.Driver {
-	return recordingDriver{}
+func (c *multiClusterRecordingConnector) Driver() driver.Driver {
+	return multiClusterRecordingDriver{}
 }
 
-// newRecordingSQLClient builds a *sqlClient.Client backed by a recordingConn, so that
+// newMultiClusterRecordingSQLClient builds a *sqlClient.Client backed by a multiClusterRecordingConn, so that
 // every statement configurePrimaryReplica issues can be inspected without a live
 // MariaDB connection.
-func newRecordingSQLClient(conn *recordingConn) *sqlClient.Client {
-	db := sql.OpenDB(&recordingConnector{conn: conn})
+func newMultiClusterRecordingSQLClient(conn *multiClusterRecordingConn) *sqlClient.Client {
+	db := sql.OpenDB(&multiClusterRecordingConnector{conn: conn})
 	return sqlClient.NewClientFromDB(db)
 }
 
@@ -237,7 +238,7 @@ func ptrTo[T any](v T) *T { return &v }
 // connection behave incorrectly. The fix resets the remote connection first, tolerating
 // the case where it doesn't exist yet (SQL error 1617).
 func TestConfigurePrimaryReplicaResetsMultiClusterConnection(t *testing.T) {
-	remoteResetQuery := fmt.Sprintf("RESET SLAVE '%s' ALL;", MultiClusterReplicaConnectionName)
+	remoteResetQuery := fmt.Sprintf("RESET SLAVE '%s' ALL;", mdbreplic.MultiClusterReplicaConnectionName)
 	localResetQuery := "RESET SLAVE  ALL;"
 
 	tests := []struct {
@@ -256,7 +257,7 @@ func TestConfigurePrimaryReplicaResetsMultiClusterConnection(t *testing.T) {
 			// specifically for the remote RESET SLAVE, e.g. on first-time setup.
 			// configurePrimaryReplica must swallow this specific error and continue.
 			execErr: func(query string) error {
-				if strings.HasPrefix(query, "RESET SLAVE") && strings.Contains(query, "'"+MultiClusterReplicaConnectionName+"'") {
+				if strings.HasPrefix(query, "RESET SLAVE") && strings.Contains(query, "'"+mdbreplic.MultiClusterReplicaConnectionName+"'") {
 					return errors.New("Error 1617 (HY000): There is no master connection 'multi-cluster'")
 				}
 				return nil
@@ -267,8 +268,8 @@ func TestConfigurePrimaryReplicaResetsMultiClusterConnection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			topology := newMultiClusterReplicaTestTopology(t)
-			conn := &recordingConn{execErr: tt.execErr}
-			client := newRecordingSQLClient(conn)
+			conn := &multiClusterRecordingConn{execErr: tt.execErr}
+			client := newMultiClusterRecordingSQLClient(conn)
 			defer client.Close()
 
 			err := topology.configurePrimaryReplica(context.Background(), client)
