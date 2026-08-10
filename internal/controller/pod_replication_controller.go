@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/hashicorp/go-multierror"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/endpoints"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	corev1 "k8s.io/api/core/v1"
@@ -26,13 +27,16 @@ var (
 // PodReplicationController reconciles a Pod object
 type PodReplicationController struct {
 	client.Client
-	recorder events.EventRecorder
+	recorder            events.EventRecorder
+	endpointsReconciler *endpoints.EndpointsReconciler
 }
 
-func NewPodReplicationController(client client.Client, recorder events.EventRecorder) PodReadinessController {
+func NewPodReplicationController(client client.Client, recorder events.EventRecorder,
+	endpointsReconciler *endpoints.EndpointsReconciler) PodReadinessController {
 	return &PodReplicationController{
-		Client:   client,
-		recorder: recorder,
+		Client:              client,
+		recorder:            recorder,
+		endpointsReconciler: endpointsReconciler,
 	}
 }
 
@@ -49,6 +53,11 @@ func (r *PodReplicationController) ReconcilePodReady(ctx context.Context, pod co
 		return fmt.Errorf("error getting Pod index: %v", err)
 	}
 	if *index != *mariadb.Status.CurrentPrimaryPodIndex {
+		// This pod is a replica. Ensure it is registered in the secondary-svc endpoint.
+		secondaryServiceKey := mariadb.SecondaryServiceKey()
+		if _, err := r.endpointsReconciler.Reconcile(ctx, secondaryServiceKey, mariadb, secondaryServiceKey.Name); err != nil {
+			return fmt.Errorf("error reconciling secondary service endpoints for replica pod '%s': %v", pod.Name, err)
+		}
 		return nil
 	}
 
@@ -77,6 +86,11 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting Pod index: %v", err)
 	}
 	if *index != *mariadb.Status.CurrentPrimaryPodIndex {
+		// This pod is a replica. Ensure it is removed from the secondary-svc endpoint.
+		secondaryServiceKey := mariadb.SecondaryServiceKey()
+		if _, err := r.endpointsReconciler.Reconcile(ctx, secondaryServiceKey, mariadb, secondaryServiceKey.Name); err != nil {
+			return fmt.Errorf("error reconciling secondary service endpoints for replica pod '%s': %v", pod.Name, err)
+		}
 		return nil
 	}
 

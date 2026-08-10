@@ -21,6 +21,8 @@ const (
 	ReasonReplicationReplicaConn = "ReplicaConn"
 	// ReasonReplicationPrimaryToReplica indicates that current primary is being unlocked to become a replica.
 	ReasonReplicationPrimaryToReplica = "PrimaryToReplica"
+	// ReasonReplicationSwitchoverTimeout indicates that the switchover/failover process timed out and was aborted.
+	ReasonReplicationSwitchoverTimeout = "SwitchoverTimeout"
 
 	// ReasonGaleraClusterHealthy indicates that the cluster is healthy,
 	ReasonGaleraClusterHealthy = "GaleraClusterHealthy"
