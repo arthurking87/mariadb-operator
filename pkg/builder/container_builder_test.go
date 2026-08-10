@@ -2008,6 +2008,69 @@ func TestMariadbContainers(t *testing.T) {
 	}
 }
 
+func TestMariadbContainerDefaultLifecycle(t *testing.T) {
+	tests := []struct {
+		name    string
+		mariadb *mariadbv1alpha1.MariaDB
+		want    *corev1.Lifecycle
+	}{
+		{
+			name: "no lifecycle set defaults to preStop sleep",
+			mariadb: &mariadbv1alpha1.MariaDB{
+				Spec: mariadbv1alpha1.MariaDBSpec{
+					Port: 3306,
+				},
+			},
+			want: &corev1.Lifecycle{
+				PreStop: &corev1.LifecycleHandler{
+					Sleep: &corev1.SleepAction{
+						Seconds: defaultMariadbPreStopSleepSeconds,
+					},
+				},
+			},
+		},
+		{
+			name: "user-defined lifecycle is not overridden",
+			mariadb: &mariadbv1alpha1.MariaDB{
+				Spec: mariadbv1alpha1.MariaDBSpec{
+					Port: 3306,
+					ContainerTemplate: mariadbv1alpha1.ContainerTemplate{
+						Lifecycle: &mariadbv1alpha1.Lifecycle{
+							PreStop: &mariadbv1alpha1.LifecycleHandler{
+								Exec: &mariadbv1alpha1.ExecAction{
+									Command: []string{"echo", "custom"},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &corev1.Lifecycle{
+				PreStop: &corev1.LifecycleHandler{
+					Exec: &corev1.ExecAction{
+						Command: []string{"echo", "custom"},
+					},
+				},
+			},
+		},
+	}
+
+	builder := newDefaultTestBuilder(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			containers, err := builder.mariadbContainers(tt.mariadb, withLifecycle(true))
+			if err != nil {
+				t.Fatalf("unexpected error building containers: %v", err)
+			}
+
+			if diff := cmp.Diff(tt.want, containers[0].Lifecycle); diff != "" {
+				t.Errorf("unexpected Lifecycle (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestMariadbInitContainers(t *testing.T) {
 	tests := []struct {
 		name                string

@@ -8232,7 +8232,10 @@ spec:
                   This can be useful for maintenance, as disabling the reconciliation prevents the operator from interfering with user operations during maintenance activities.
                 type: boolean
               terminationGracePeriodSeconds:
-                description: TerminationGracePeriodSeconds to be used in the Pod.
+                default: 30
+                description: |-
+                  TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is
+                  consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM.
                 format: int64
                 type: integer
               timeZone:
