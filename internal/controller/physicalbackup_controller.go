@@ -18,6 +18,7 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/discovery"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	mdbtime "github.com/mariadb-operator/mariadb-operator/v26/pkg/time"
@@ -452,8 +453,11 @@ func sortPods(pods []corev1.Pod) {
 }
 
 func isReplicationReady(ctx context.Context, client *sql.Client, logger logr.Logger) (bool, error) {
-	replStatus, err := client.ReplicaStatus(ctx, logger)
+	replStatus, err := client.ReplicaStatus(ctx, logger, sql.WithConnectionName(replication.ReplicaConnectionName))
 	if err != nil {
+		if sql.IsConnectionNotExists(err) {
+			return false, nil
+		}
 		return false, fmt.Errorf("error getting replica status: %v", err)
 	}
 	return replStatus.LastIOErrno != nil && *replStatus.LastIOErrno == 0 &&

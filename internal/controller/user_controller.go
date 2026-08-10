@@ -11,7 +11,6 @@ import (
 	sqlClient "github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // UserReconciler reconciles a User object
@@ -137,7 +136,7 @@ func (wr *wrappedUserReconciler) Reconcile(ctx context.Context, mdbClient *sqlCl
 
 	exists, err := mdbClient.UserExists(ctx, username, hostname)
 	if err != nil {
-		log.FromContext(ctx).Error(err, "Error checking if User exists")
+		return fmt.Errorf("error checking if User exists: %v", err)
 	}
 
 	if !exists {

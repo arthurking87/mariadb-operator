@@ -9,8 +9,8 @@ import (
 	"github.com/hashicorp/go-multierror"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
 	condition "github.com/mariadb-operator/mariadb-operator/v26/pkg/condition"
-	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	mdbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	stspkg "github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	appsv1 "k8s.io/api/apps/v1"
@@ -42,7 +42,7 @@ func (r *MariaDBReconciler) reconcileStatus(ctx context.Context, mdb *mariadbv1a
 	}
 	replStatus, replErrStatusErr := r.getReplicaStatus(ctx, mdb, logger)
 	if replErrStatusErr != nil {
-		logger.Info("error getting replication status", "err", replStatus)
+		logger.Info("error getting replication status", "err", replErrStatusErr)
 	}
 
 	mxsPrimaryPodIndex, mxsErr := r.getMaxScalePrimaryPod(ctx, mdb)
@@ -149,8 +149,10 @@ func (r *MariaDBReconciler) getReplicationRole(ctx context.Context, mdb *mariadb
 	if err != nil && !sql.IsConnectionNotExists(err) {
 		aggErr = multierror.Append(aggErr, err)
 	}
-	isReplica, err = client.IsReplicationReplica(ctx)
-	aggErr = multierror.Append(aggErr, err)
+	isReplica, err = client.IsReplicationReplica(ctx, sql.WithConnectionName(replication.ReplicaConnectionName))
+	if err != nil && !sql.IsConnectionNotExists(err) {
+		aggErr = multierror.Append(aggErr, err)
+	}
 	isPrimary, err = client.HasConnectedReplicas(ctx)
 	aggErr = multierror.Append(aggErr, err)
 
@@ -245,6 +247,8 @@ func (r *MariaDBReconciler) getReplicaStatus(ctx context.Context,
 		var replOpts []sql.ReplicationOpt
 		if mdb.IsMultiClusterPrimaryReplica(i) {
 			replOpts = append(replOpts, sql.WithConnectionName(replication.MultiClusterReplicaConnectionName))
+		} else {
+			replOpts = append(replOpts, sql.WithConnectionName(replication.ReplicaConnectionName))
 		}
 		newReplicaStatus, err := client.ReplicaStatus(ctx, logger, replOpts...)
 		if err != nil {

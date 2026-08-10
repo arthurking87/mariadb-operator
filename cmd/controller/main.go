@@ -343,6 +343,7 @@ var rootCmd = &cobra.Command{
 			controller.NewPodReplicationController(
 				client,
 				replRecorder,
+				endpointsReconciler,
 			),
 			[]string{
 				metadata.MariadbAnnotation,
