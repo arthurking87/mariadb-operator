@@ -19,22 +19,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// recordingConn is a minimal driver.Conn that records every statement it is asked to
+// maxConnsRecordingConn is a minimal driver.Conn that records every statement it is asked to
 // execute or query, so tests can assert on the exact SQL that the reconciler issued
 // without needing a live MariaDB connection.
-type recordingConn struct {
+type maxConnsRecordingConn struct {
 	mu      sync.Mutex
 	execs   []string
 	queries []string
 }
 
-func (c *recordingConn) Prepare(query string) (driver.Stmt, error) {
+func (c *maxConnsRecordingConn) Prepare(query string) (driver.Stmt, error) {
 	return nil, errors.New("not supported")
 }
-func (c *recordingConn) Close() error              { return nil }
-func (c *recordingConn) Begin() (driver.Tx, error) { return nil, errors.New("not supported") }
+func (c *maxConnsRecordingConn) Close() error              { return nil }
+func (c *maxConnsRecordingConn) Begin() (driver.Tx, error) { return nil, errors.New("not supported") }
 
-func (c *recordingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+func (c *maxConnsRecordingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.mu.Lock()
 	c.execs = append(c.execs, query)
 	c.mu.Unlock()
@@ -44,7 +44,7 @@ func (c *recordingConn) ExecContext(ctx context.Context, query string, args []dr
 // QueryContext makes every query return exactly one row, so that UserExists (which relies on
 // Client.Exists / rows.Next()) sees the account as already existing. This drives Reconcile into
 // the AlterUser branch under test.
-func (c *recordingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *maxConnsRecordingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	c.mu.Lock()
 	c.queries = append(c.queries, query)
 	c.mu.Unlock()
@@ -64,24 +64,24 @@ func (r *oneRowRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-type recordingDriver struct{}
+type maxConnsRecordingDriver struct{}
 
-func (recordingDriver) Open(name string) (driver.Conn, error) {
+func (maxConnsRecordingDriver) Open(name string) (driver.Conn, error) {
 	return nil, errors.New("use connector")
 }
 
-type recordingConnector struct{ conn *recordingConn }
+type maxConnsRecordingConnector struct{ conn *maxConnsRecordingConn }
 
-func (c *recordingConnector) Connect(ctx context.Context) (driver.Conn, error) { return c.conn, nil }
-func (c *recordingConnector) Driver() driver.Driver                            { return recordingDriver{} }
+func (c *maxConnsRecordingConnector) Connect(ctx context.Context) (driver.Conn, error) { return c.conn, nil }
+func (c *maxConnsRecordingConnector) Driver() driver.Driver                            { return maxConnsRecordingDriver{} }
 
 // TestReconcileAppliesMaxUserConnectionsWithoutPassword is a regression test for
 // https://github.com/mariadb-operator/mariadb-operator/issues/34: wrappedUserReconciler.Reconcile
 // must call AlterUser for an existing account even when no password-related field is set on the
 // User spec, so that spec-only changes such as MaxUserConnections are actually applied.
 func TestReconcileAppliesMaxUserConnectionsWithoutPassword(t *testing.T) {
-	conn := &recordingConn{}
-	db := stddb.OpenDB(&recordingConnector{conn: conn})
+	conn := &maxConnsRecordingConn{}
+	db := stddb.OpenDB(&maxConnsRecordingConnector{conn: conn})
 	defer db.Close()
 	mdbClient := sqlClient.NewClientFromDB(db)
 
