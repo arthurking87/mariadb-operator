@@ -349,7 +349,7 @@ func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, clie
 	// previous configuration could make the new CHANGE MASTER/START SLAVE behave incorrectly.
 	if err := client.ResetSlave(
 		ctx,
-		sql.WithConnectionName(MultiClusterReplicaConnectionName),
+		sql.WithConnectionName(mdbreplic.MultiClusterReplicaConnectionName),
 	); err != nil && !sql.IsConnectionNotExists(err) {
 		return fmt.Errorf("error resetting remote slave: %v", err)
 	}
