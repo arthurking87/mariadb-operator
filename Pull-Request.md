@@ -3,6 +3,28 @@
 > 產生日期：2026-07-02。所有 PR 的 base 分支均為 `release`。
 > CI 欄位為產生當下的快照；處理進度請看最下方的「處理順序」。
 
+## 2026-08-11 更新：PR #93 Integration tests 失敗根因調查（非本 PR 造成的回歸）
+
+`fix/issue-10-leader-election`（PR #93）補完 `b40c8d47` 那筆 regression test 後 CI 曾一度全綠，這次重跑 `Integration tests` job 連續兩次都失敗（`gh run rerun 31367933643 --failed` 觸發），都卡在同一個 spec：
+
+```
+MariaDB replication restore from backup
+  should restore database [It] from volume snapshot
+  internal/controller/mariadb_controller_replication_test.go:360
+[FAILED] Timed out after 300.001s.
+```
+
+**排查過程**：兩次重跑失敗的 log 模式一模一樣——`mariadb-repl-0` 反覆執行 `Configuring primary`（一次約 60-80 次、大致每秒一次），全程無任何 error log，最終才推進到 `Configuring replica`，但仍趕不上整體 300 秒（`testHighTimeout`，`internal/controller/utils_test.go:40`）的 `Eventually` 視窗。逐行讀 code 排除了「reconcile 邏輯壞掉」的懷疑：
+
+- `pkg/controller/replication/controller.go:239-252`：`ConfigurePrimary` 本身冪等、每次呼叫都成功，之所以被反覆呼叫，是因為 `internal/controller/mariadb_controller_status.go:154,166-167` 規定 pod 要 `client.HasConnectedReplicas(ctx)` 回傳 true 才會被標記 role=`Primary`，標記之前 `shouldSkipPrimaryReconciliation` 每輪都回 false，屬設計上的正常輪詢（症狀，非病因）。
+- 真正的瓶頸是 primary pod 從 VolumeSnapshot 還原後,replica 的複製連線遲遲沒有真的接上。比對同一個 `DescribeTable` 裡另一個「from physical backup」（S3/`mariabackup`）Entry 從未踩到這個問題，差異在於 `internal/controller/physicalbackup_controller_snapshot.go:292-293` 拍 VolumeSnapshot 前只下了 `LockTablesWithReadLock`，沒有強制把 InnoDB buffer pool 的 dirty page flush 到磁碟——還原出來的 volume 等同「被強制關機」狀態，mysqld 第一次啟動要跑 InnoDB crash recovery（重放 redo log）才能開始接受連線，耗時本來就會依快照當下未落盤的異動量浮動；`mariabackup` 那條路徑因為備份後有 `--prepare` 步驟預先套用 redo log，還原出來的資料目錄不需要 crash recovery，所以穩定得多。
+
+**結論**：這是一個真實存在、目前偶爾會撞上 `testHighTimeout=300s` 固定時間窗的效能特性（VolumeSnapshot 備份沒有強制 flush），**跟這個 PR 改的 leader election 參數完全無關**——PR #93 的 diff 只動了 `cmd/controller/main.go`/`cert_controller.go`，integration test suite 是直接在測試進程裡建 manager 跑 reconciler，不走 `cmd/controller/main.go` 的 `rootCmd`，兩者路徑不相交。不是這個 PR 造成的回歸，但目前會間歇性擋住它的 CI。
+
+**尚待決定**（超出本 PR 範圍，記錄供後續參考）：
+1. 幫 `internal/controller/mariadb_controller_replication_test.go:382` 這個 `Entry("from volume snapshot", ...)` 標 `flaky`（比照旁邊已有 `FlakeAttempts` 的其他 spec），讓 PR #93 先過。
+2. 更根本的修法：`physicalbackup_controller_snapshot.go` 在 `LockTablesWithReadLock` 之後、真正觸發 VolumeSnapshot 之前，補一段強制 dirty page flush（或等待 checkpoint age 收斂）的邏輯，讓 VolumeSnapshot 還原也能跳過 crash recovery——這是一個獨立的 issue/PR，不在這次調查範圍內動手。
+
 ## 2026-08-05 更新（二）：10 個缺測試的 fix PR 已全數補上單元測試並推送
 
 針對上一節盤點出的 10 個沒有測試的 `fix(...)` PR，逐一在對應的 PR branch 上補了一個（或兩個）針對該修法的 regression test，並直接 commit + push 更新到對應的 open PR。每個都遵守同樣的驗證流程：**先暫時還原掉修法本身，確認新測試會 FAIL；再還原修法，確認 PASS**，證明測試真的有打到那個 bug，而不只是能編譯。全部在 Docker（`golang:1.26.3-alpine3.23`，因為這台機器沒裝本機 Go）跑過 `gofmt`/`go vet`/`go build`/`go test`，且都乾淨。
@@ -67,7 +89,7 @@
 | [99](https://github.com/arthurking87/mariadb-operator/pull/99) | fix(#46): 區分 reconcileStatus 的 NotFound 與暫時性 API 錯誤 | +115/-4 | 2 | ⏳ 剛開出待確認 | ✅ |
 | [98](https://github.com/arthurking87/mariadb-operator/pull/98) | chore: 啟用 CodeRabbit 自動 review（非 issue 修復，維運性變更） | +3/-0 | 1 | ✅ PASS | ✅ |
 | [94](https://github.com/arthurking87/mariadb-operator/pull/94) | fix(#11): 預設 preStop hook + 明確 TerminationGracePeriodSeconds | +98/-6 | 7 | ✅ PASS | ✅ |
-| [93](https://github.com/arthurking87/mariadb-operator/pull/93) | fix(#10): 調整 leader election lease 時序 + 新增 readyz check | +50/-7 | 2 | ✅ PASS | ✅ |
+| [93](https://github.com/arthurking87/mariadb-operator/pull/93) | fix(#10): 調整 leader election lease 時序 + 新增 readyz check | +50/-7 | 2 | ⚠️ Integration tests 間歇性逾時（與本 PR 無關，見 2026-08-11 章節） | ✅ |
 | [92](https://github.com/arthurking87/mariadb-operator/pull/92) | fix(#8): spec 變更但角色未變時也要 reapply replication config | +193/-2 | 7 | ✅ PASS | ✅ |
 | [90](https://github.com/arthurking87/mariadb-operator/pull/90) | feat(update): bypass annotation 解除卡住的 rolling update | +11/-0 | 2 | ✅ PASS | ✅ |
 | [89](https://github.com/arthurking87/mariadb-operator/pull/89) | fix(replication): 刪除 NotReady primary Pod 強制斷線重連 | +8/-0 | 1 | ✅ PASS | ✅ |
