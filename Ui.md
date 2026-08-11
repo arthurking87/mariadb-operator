@@ -3,6 +3,10 @@
 > 產生日期：2026-08-05。記錄 `ui/` 這個 React + Express 小面板的現況、異動決策，以及尚未實作項目的規劃討論。
 > 面板結構：`ui/src/App.jsx`（路由）+ `ui/src/components/Sidebar.jsx`（左側導覽）+ `ui/src/pages/*.jsx`（各頁）+ `ui/server.js`（Express API，包在同一個容器內用 `kubectl`/`helm` 操作叢集）。
 
+## PMM 相關筆記另外整理到 Pmm-Advisor.md（2026-08-11）
+
+PMM Server 安裝/存取方式，以及「Advisor 是否一定要把 pmm-agent 放成 pod sidecar」這個架構討論（結論：不必要，Advisor 只認 service 有沒有註冊、agent 連不連得到，sidecar/remote instance/集中式 pmm-client 都可用；這個 repo UI 選 sidecar 純粹是為了走 localhost 簡化憑證跟網路曝露面），記錄在同層目錄的 [`Pmm-Advisor.md`](./Pmm-Advisor.md)，跟這份 UI 異動追蹤分開放，因為內容是 PMM 本身的用法/架構知識，不是這個 UI 面板的程式碼異動記錄。
+
 ## Config Health 加權分數：實作 + 真實叢集測試（2026-08-07）
 
 延續下面「討論」那節的結論，實際把方案 3（SonarQube/Lighthouse 加權分數）做進 `InstanceDetail.jsx` 的 `HealthChecklist`。

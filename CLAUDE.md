@@ -78,6 +78,27 @@ Open `http://localhost:5173` in your browser.
 
 The backend calls `kubectl` and `helm` from the host machine, so the cluster must be reachable (`kubectl get nodes` works) before starting the UI.
 
+### PMM Server (Percona Monitoring and Management)
+
+PMM server can be installed via the Percona Helm chart repo (not vendored in this repo):
+
+```bash
+helm repo add percona https://percona.github.io/percona-helm-charts/
+helm repo update percona
+helm install pmm-server percona/pmm --namespace <namespace>
+```
+
+Defaults use a `NodePort` Service (`monitoring-service`) and the cluster's default StorageClass for the `pmm-storage` PVC — no extra `--set` flags needed on a KIND cluster with a default StorageClass.
+
+Get the URL and admin password after install:
+```bash
+export NODE_PORT=$(kubectl get --namespace <namespace> -o jsonpath="{.spec.ports[0].nodePort}" services monitoring-service)
+export NODE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
+echo https://$NODE_IP:$NODE_PORT
+
+export ADMIN_PASS=$(kubectl get secret pmm-secret --namespace <namespace> -o jsonpath='{.data.PMM_ADMIN_PASSWORD}' | base64 --decode)
+```
+
 ## Contributing workflow
 
 ### Branch model
