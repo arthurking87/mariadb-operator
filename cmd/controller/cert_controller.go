@@ -78,12 +78,20 @@ var certControllerCmd = &cobra.Command{
 			Metrics: metricsserver.Options{
 				BindAddress: metricsAddr,
 			},
-			HealthProbeBindAddress: healthAddr,
-			LeaderElection:         leaderElect,
-			LeaderElectionID:       certControllerLeaderElectionID,
+			HealthProbeBindAddress:        healthAddr,
+			LeaderElection:                leaderElect,
+			LeaderElectionID:              certControllerLeaderElectionID,
+			LeaseDuration:                 &leaderElectionLeaseDuration,
+			RenewDeadline:                 &leaderElectionRenewDeadline,
+			RetryPeriod:                   &leaderElectionRetryPeriod,
+			LeaderElectionReleaseOnCancel: true,
 		})
 		if err != nil {
 			setupLog.Error(err, "Unable to start manager")
+			os.Exit(1)
+		}
+		if err := mgr.AddReadyzCheck("leader-election", leaderElectionReadyzCheck(mgr, leaderElect)); err != nil {
+			setupLog.Error(err, "Unable to set up leader election ready check")
 			os.Exit(1)
 		}
 

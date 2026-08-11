@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -63,8 +65,11 @@ var (
 	metricsAddr string
 	healthAddr  string
 
-	leaderElect      bool
-	leaderElectionID string
+	leaderElect                 bool
+	leaderElectionID            string
+	leaderElectionLeaseDuration time.Duration
+	leaderElectionRenewDeadline time.Duration
+	leaderElectionRetryPeriod   time.Duration
 
 	logLevel           string
 	logLevelName       = "log-level"
@@ -123,6 +128,12 @@ func init() {
 	rootCmd.Flags().StringVar(&leaderElectionID, "leader-election-id", "mariadb-operator.mariadb.com",
 		"Leader election ID used to acquire the leader lock. Customize this when running multiple independent "+
 			"operator instances in the same namespace, otherwise they will contend for the same lease.")
+	rootCmd.PersistentFlags().DurationVar(&leaderElectionLeaseDuration, "leader-election-lease-duration", 15*time.Second,
+		"Duration that non-leader candidates will wait to force acquire leadership.")
+	rootCmd.PersistentFlags().DurationVar(&leaderElectionRenewDeadline, "leader-election-renew-deadline", 10*time.Second,
+		"Duration that the leader will retry refreshing leadership before giving up.")
+	rootCmd.PersistentFlags().DurationVar(&leaderElectionRetryPeriod, "leader-election-retry-period", 2*time.Second,
+		"Duration the LeaderElector clients should wait between tries of actions.")
 
 	rootCmd.PersistentFlags().StringVar(&logLevel, logLevelName, "info", "Log level to use, one of: "+
 		"debug, info, warn, error, dpanic, panic, fatal.")
@@ -180,6 +191,22 @@ func init() {
 	viper.AutomaticEnv()
 }
 
+// leaderElectionReadyzCheck reports not-ready while leader election is enabled and this instance
+// has not yet been elected leader, instead of relying solely on the generic healthz.Ping check.
+func leaderElectionReadyzCheck(mgr ctrl.Manager, enabled bool) healthz.Checker {
+	return func(_ *http.Request) error {
+		if !enabled {
+			return nil
+		}
+		select {
+		case <-mgr.Elected():
+			return nil
+		default:
+			return errors.New("leader election in progress: not yet elected as leader")
+		}
+	}
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "mariadb-operator",
 	Short: "MariaDB operator.",
@@ -220,9 +247,13 @@ var rootCmd = &cobra.Command{
 			Metrics: metricsserver.Options{
 				BindAddress: metricsAddr,
 			},
-			HealthProbeBindAddress: healthAddr,
-			LeaderElection:         leaderElect,
-			LeaderElectionID:       leaderElectionID,
+			HealthProbeBindAddress:        healthAddr,
+			LeaderElection:                leaderElect,
+			LeaderElectionID:              leaderElectionID,
+			LeaseDuration:                 &leaderElectionLeaseDuration,
+			RenewDeadline:                 &leaderElectionRenewDeadline,
+			RetryPeriod:                   &leaderElectionRetryPeriod,
+			LeaderElectionReleaseOnCancel: true,
 			Controller: config.Controller{
 				MaxConcurrentReconciles: maxConcurrentReconciles,
 				CacheSyncTimeout:        cacheSyncTimeout,
@@ -260,6 +291,10 @@ var rootCmd = &cobra.Command{
 		mgr, err := ctrl.NewManager(restConfig, mgrOpts)
 		if err != nil {
 			setupLog.Error(err, "Unable to start manager")
+			os.Exit(1)
+		}
+		if err := mgr.AddReadyzCheck("leader-election", leaderElectionReadyzCheck(mgr, leaderElect)); err != nil {
+			setupLog.Error(err, "Unable to set up leader election ready check")
 			os.Exit(1)
 		}
 
