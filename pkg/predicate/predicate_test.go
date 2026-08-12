@@ -10,26 +10,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
-func TestIsMariadbReplRelated(t *testing.T) {
-	tests := []struct {
-		name     string
-		objName  string
-		expected bool
-	}{
-		{name: "repl secret matches", objName: "mariadb-mariadb-repl-0", expected: true},
-		{name: "unrelated secret does not match", objName: "mariadb-root-password", expected: false},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			obj := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: tt.objName}}
-			if got := IsMariadbReplRelated(obj); got != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, got)
-			}
-		})
-	}
-}
-
 func TestPredicateWithLabelCountsEvents(t *testing.T) {
 	filteredEventsTotal.Reset()
 	pred := PredicateWithLabel("foo")

@@ -1,8 +1,6 @@
 package predicate
 
 import (
-	"regexp"
-
 	"github.com/prometheus/client_golang/prometheus"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -10,12 +8,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
-
-// mariadbReplRegex matches the internal replication plumbing resources
-// (e.g. Secrets/ConfigMaps named "<mariadb>-mariadb-repl-<n>") that aren't
-// the user-facing MariaDB object itself. Predicates can use it to avoid
-// triggering reconciles for events on these non-DB-related resources.
-var mariadbReplRegex = regexp.MustCompile(`.*-mariadb-repl-.*`)
 
 // filteredEventsTotal counts events seen by predicates in this package,
 // broken down by which predicate evaluated them and whether the event was
@@ -40,12 +32,6 @@ func observe(predicateName string, passed bool) bool {
 	}
 	filteredEventsTotal.WithLabelValues(predicateName, result).Inc()
 	return passed
-}
-
-// IsMariadbReplRelated reports whether the object's name matches the
-// internal replication plumbing naming scheme (see mariadbReplRegex).
-func IsMariadbReplRelated(o client.Object) bool {
-	return mariadbReplRegex.MatchString(o.GetName())
 }
 
 func PredicateWithAnnotations(annotations []string) predicate.Predicate {
