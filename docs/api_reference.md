@@ -1388,7 +1388,7 @@ _Appears in:_
 | `priorityClassName` _string_ | PriorityClassName to be used in the Pod. |  |  |
 | `topologySpreadConstraints` _[TopologySpreadConstraint](#topologyspreadconstraint) array_ | TopologySpreadConstraints to be used in the Pod. |  |  |
 | `enableServiceLinks` _boolean_ | EnableServiceLinks to be used in the Pod. |  |  |
-| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. |  |  |
+| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is<br />consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM. | 30 |  |
 
 
 #### MariaDBRef
@@ -1455,7 +1455,7 @@ _Appears in:_
 | `priorityClassName` _string_ | PriorityClassName to be used in the Pod. |  |  |
 | `topologySpreadConstraints` _[TopologySpreadConstraint](#topologyspreadconstraint) array_ | TopologySpreadConstraints to be used in the Pod. |  |  |
 | `enableServiceLinks` _boolean_ | EnableServiceLinks to be used in the Pod. |  |  |
-| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. |  |  |
+| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is<br />consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM. | 30 |  |
 | `suspend` _boolean_ | Suspend indicates whether the current resource should be suspended or not.<br />This can be useful for maintenance, as disabling the reconciliation prevents the operator from interfering with user operations during maintenance activities. | false |  |
 | `image` _string_ | Image name to be used by the MariaDB instances. The supported format is `<image>:<tag>`.<br />Only MariaDB official images are supported. |  |  |
 | `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#pullpolicy-v1-core)_ | ImagePullPolicy is the image pull policy. One of `Always`, `Never` or `IfNotPresent`. If not defined, it defaults to `IfNotPresent`. |  | Enum: [Always Never IfNotPresent] <br /> |
@@ -2553,6 +2553,7 @@ _Appears in:_
 | `podIndex` _integer_ | PodIndex is the StatefulSet index of the primary node. The user may change this field to perform a manual switchover. |  |  |
 | `autoFailover` _boolean_ | AutoFailover indicates whether the operator should automatically update PodIndex to perform an automatic primary failover.<br />It is enabled by default. |  |  |
 | `autoFailoverDelay` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#duration-v1-meta)_ | AutoFailoverDelay indicates the duration before performing an automatic primary failover.<br />By default, no extra delay is added. |  |  |
+| `switchoverTimeout` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#duration-v1-meta)_ | SwitchoverTimeout is the maximum cumulative duration allowed for the "wait for replica sync" phase<br />of a switchover/failover to keep retrying, across reconciles, before giving up. It does not cover<br />the other phases (locking the primary, promoting the new primary...), which have their own fixed<br />per-attempt timeout instead. If this timeout is exceeded, the operator aborts the operation: it<br />unlocks the primary, disables read_only, and reverts the desired primary back to the current one.<br />It defaults to 60s. |  |  |
 
 
 #### Probe

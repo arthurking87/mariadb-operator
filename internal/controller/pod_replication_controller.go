@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/hashicorp/go-multierror"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/endpoints"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
 	corev1 "k8s.io/api/core/v1"
@@ -25,13 +27,16 @@ var (
 // PodReplicationController reconciles a Pod object
 type PodReplicationController struct {
 	client.Client
-	recorder events.EventRecorder
+	recorder            events.EventRecorder
+	endpointsReconciler *endpoints.EndpointsReconciler
 }
 
-func NewPodReplicationController(client client.Client, recorder events.EventRecorder) PodReadinessController {
+func NewPodReplicationController(client client.Client, recorder events.EventRecorder,
+	endpointsReconciler *endpoints.EndpointsReconciler) PodReadinessController {
 	return &PodReplicationController{
-		Client:   client,
-		recorder: recorder,
+		Client:              client,
+		recorder:            recorder,
+		endpointsReconciler: endpointsReconciler,
 	}
 }
 
@@ -48,6 +53,11 @@ func (r *PodReplicationController) ReconcilePodReady(ctx context.Context, pod co
 		return fmt.Errorf("error getting Pod index: %v", err)
 	}
 	if *index != *mariadb.Status.CurrentPrimaryPodIndex {
+		// This pod is a replica. Ensure it is registered in the secondary-svc endpoint.
+		secondaryServiceKey := mariadb.SecondaryServiceKey()
+		if _, err := r.endpointsReconciler.Reconcile(ctx, secondaryServiceKey, mariadb, secondaryServiceKey.Name); err != nil {
+			return fmt.Errorf("error reconciling secondary service endpoints for replica pod '%s': %v", pod.Name, err)
+		}
 		return nil
 	}
 
@@ -76,6 +86,11 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting Pod index: %v", err)
 	}
 	if *index != *mariadb.Status.CurrentPrimaryPodIndex {
+		// This pod is a replica. Ensure it is removed from the secondary-svc endpoint.
+		secondaryServiceKey := mariadb.SecondaryServiceKey()
+		if _, err := r.endpointsReconciler.Reconcile(ctx, secondaryServiceKey, mariadb, secondaryServiceKey.Name); err != nil {
+			return fmt.Errorf("error reconciling secondary service endpoints for replica pod '%s': %v", pod.Name, err)
+		}
 		return nil
 	}
 
@@ -134,8 +149,36 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 		return fmt.Errorf("error getting new primary Pod index: %v", err)
 	}
 
+	return r.promoteReplica(ctx, pod, mariadb, primary, newPrimary, logger)
+}
+
+// promoteReplica deletes the old primary Pod and promotes newPrimary to be the new primary,
+// patching mariadb accordingly. primary and newPrimary are the resolved old and new primary
+// Pod indexes respectively.
+func (r *PodReplicationController) promoteReplica(ctx context.Context, pod corev1.Pod, mariadb *mariadbv1alpha1.MariaDB,
+	primary, newPrimary *int, logger logr.Logger) error {
+	// The old primary may still be holding application connections open (e.g. it is
+	// NotReady due to a failed health check rather than a crashed mariadbd process),
+	// which would otherwise sit until the client times out. Deleting it forces those
+	// connections closed and lets the StatefulSet recreate it cleanly as a replica.
+	//
+	// This runs before the Primary.PodIndex patch below on purpose: once that patch lands,
+	// spec.replication.primary.podIndex differs from status.currentPrimaryPodIndex, which
+	// makes shouldReconcile (via IsReplicationSwitchoverRequired) return false on the next
+	// reconcile, and hands control over to the switchover reconciler instead — so a Delete
+	// failure here would otherwise have no independent retry path. Keeping the Delete first
+	// means a transient failure just requeues this same reconcile from the top, with nothing
+	// patched yet, so it naturally retries until the Pod is actually gone.
+	//
+	// The UID precondition guards against deleting a different Pod instance than the one we
+	// observed: if the old primary was already recreated with the same name between us
+	// reading it and issuing the Delete, a name-only Delete could remove the new instance.
+	if err := r.Delete(ctx, &pod, client.Preconditions{UID: &pod.UID}); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("error deleting Pod '%s': %v", pod.Name, err)
+	}
+
 	var errBundle *multierror.Error
-	err = r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
+	err := r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
 		mdb.Spec.Replication.Primary.PodIndex = newPrimary
 	})
 	errBundle = multierror.Append(errBundle, err)
