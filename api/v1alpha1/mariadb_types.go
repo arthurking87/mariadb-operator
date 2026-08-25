@@ -579,8 +579,10 @@ type MariaDBPodTemplate struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	EnableServiceLinks *bool `json:"enableServiceLinks,omitempty"`
-	// TerminationGracePeriodSeconds to be used in the Pod.
+	// TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is
+	// consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM.
 	// +optional
+	// +kubebuilder:default=30
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
 }

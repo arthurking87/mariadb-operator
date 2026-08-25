@@ -65,6 +65,7 @@ spec:
             - --log-level={{ .Values.logLevel }}
             {{- if .Values.ha.enabled }}
             - --leader-elect
+            - --leader-election-id={{ .Values.leaderElectionID | default (printf "%s.mariadb-operator.mariadb.com" (include "mariadb-operator.fullname" .)) }}
             {{- end }}
             {{- if .Values.pprof.enabled }}
             - --pprof
