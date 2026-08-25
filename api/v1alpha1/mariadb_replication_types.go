@@ -479,6 +479,20 @@ func (m *MariaDB) IsReplicationSwitchoverRequired() bool {
 	return *m.Status.CurrentPrimaryPodIndex != *m.Spec.Replication.Primary.PodIndex
 }
 
+// NewPrimaryConfiguredMessage returns the ConditionTypeNewPrimaryConfigured message used to
+// identify which Pod it refers to. It is exported so that pkg/condition can set the same message
+// that IsNewPrimaryConfigured below reads back.
+func NewPrimaryConfiguredMessage(newPrimaryPod string) string {
+	return fmt.Sprintf("New primary '%s' has been configured", newPrimaryPod)
+}
+
+// IsNewPrimaryConfigured indicates whether newPrimaryPod has already been made writable during
+// an in-progress switchover to it.
+func (m *MariaDB) IsNewPrimaryConfigured(newPrimaryPod string) bool {
+	c := meta.FindStatusCondition(m.Status.Conditions, ConditionTypeNewPrimaryConfigured)
+	return c != nil && c.Status == metav1.ConditionTrue && c.Message == NewPrimaryConfiguredMessage(newPrimaryPod)
+}
+
 // ReplicationRole represents the observed replication roles.
 type ReplicationRole string
 

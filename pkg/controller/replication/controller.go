@@ -99,6 +99,11 @@ type ReconcileRequest struct {
 	agentClientSet      *agentclient.ClientSet
 	currentPrimaryReady bool
 	replicasSynced      bool
+	// primaryLockSession holds the connection that acquired the switchover read lock on the
+	// current primary (see lockPrimaryWithReadLock). FLUSH TABLES WITH READ LOCK is
+	// session-scoped, so it must be released through this same session rather than through a
+	// fresh pooled connection off replClientSet.
+	primaryLockSession *sql.LockedSession
 }
 
 func (r *ReconcileRequest) Close() error {

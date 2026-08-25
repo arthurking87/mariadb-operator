@@ -290,12 +290,13 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 	defer client.Close()
 
 	logger.V(1).Info("Locking tables with read lock")
-	if err := client.LockTablesWithReadLock(ctx); err != nil {
+	lockSession, err := client.LockTablesWithReadLock(ctx)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("error locking tables with read lock: %v", err)
 	}
 	defer func() {
 		logger.V(1).Info("Unlocking tables with read lock")
-		if err := client.UnlockTables(ctx); err != nil {
+		if err := lockSession.Unlock(ctx); err != nil {
 			logger.Error(err, "error unlocking tables")
 		}
 	}()

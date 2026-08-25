@@ -35,6 +35,18 @@ func SetPrimarySwitched(c Conditioner) {
 	})
 }
 
+// SetNewPrimaryConfigured records that newPrimary has already been made writable during an
+// in-progress switchover, so a retry can resume past the phases that got it there instead of
+// restarting the whole sequence.
+func SetNewPrimaryConfigured(c Conditioner, newPrimary string) {
+	c.SetCondition(metav1.Condition{
+		Type:    mariadbv1alpha1.ConditionTypeNewPrimaryConfigured,
+		Status:  metav1.ConditionTrue,
+		Reason:  mariadbv1alpha1.ConditionReasonSwitchPrimary,
+		Message: mariadbv1alpha1.NewPrimaryConfiguredMessage(newPrimary),
+	})
+}
+
 func SetPrimarySwitchoverTimeout(c Conditioner, elapsed string) {
 	c.SetCondition(metav1.Condition{
 		Type:    mariadbv1alpha1.ConditionTypePrimarySwitched,

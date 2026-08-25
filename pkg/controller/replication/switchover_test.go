@@ -284,16 +284,24 @@ func findCondition(conditions []metav1.Condition, condType string) *metav1.Condi
 
 // TestSwitchoverPhase_HasNoPerPhaseTimeoutField pins the removal of switchoverPhase.timeout (and
 // therefore of the per-phase context.WithTimeout wrapping that was keyed off it) done in commit
-// 8d623a58. It passes only while the type carries no such field; reintroducing a per-phase
-// timeout field must come with a conscious update to this test, not sneak back in silently.
+// 8d623a58. It passes only while the type carries no such field (or any other field outside this
+// allow-list, which issue #80's rollback-on-failure fix added); reintroducing a per-phase timeout
+// field must come with a conscious update to this test, not sneak back in silently.
 func TestSwitchoverPhase_HasNoPerPhaseTimeoutField(t *testing.T) {
+	allowedFields := map[string]bool{
+		"name":              true,
+		"reconcile":         true,
+		"afterSuccess":      true,
+		"resumePoint":       true,
+		"rollbackOnFailure": true,
+	}
 	typ := reflect.TypeOf(switchoverPhase{})
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
-		if name != "name" && name != "reconcile" {
-			t.Fatalf("switchoverPhase has unexpected field %q (fields: name, reconcile expected); "+
-				"if this is a reintroduced per-phase timeout, SwitchoverTimeout must remain scoped to "+
-				"the %q phase only per issue #64's follow-up fix", name, waitSyncPhaseName)
+		if !allowedFields[name] {
+			t.Fatalf("switchoverPhase has unexpected field %q (allowed: name, reconcile, afterSuccess, "+
+				"resumePoint, rollbackOnFailure); if this is a reintroduced per-phase timeout, SwitchoverTimeout "+
+				"must remain scoped to the %q phase only per issue #64's follow-up fix", name, waitSyncPhaseName)
 		}
 	}
 }
@@ -355,5 +363,78 @@ func TestReconcileSwitchover_NoPerPhaseContextTimeout(t *testing.T) {
 		t.Fatalf("reconcileSwitchover contains %d context.WithTimeout call(s); SwitchoverTimeout (and any "+
 			"per-phase timeout) must only bound the %q phase via waitSyncTimedOut/handleWaitSyncFailure, "+
 			"not wrap other phases in a per-attempt context deadline", withTimeoutCalls, waitSyncPhaseName)
+	}
+}
+
+// TestSwitchoverPhases_RollbackOnFailureGating is a regression test for issue #80's rollback fix:
+// rolling back write access on a phase failure is only safe up to and including "Wait sync",
+// because "Configure new primary" is what makes the new primary writable. If any phase at or after
+// "Configure new primary" were marked rollbackOnFailure, a failure there — even though the new
+// primary may already be writable — would restore the old primary's write access too, risking two
+// writable primaries at once (see rollbackSwitchover's doc comment). This asserts the invariant
+// directly against the real phase list, rather than relying on reading the source at review time.
+func TestSwitchoverPhases_RollbackOnFailureGating(t *testing.T) {
+	r := &ReplicationReconciler{}
+	phases := r.switchoverPhases()
+
+	configureNewPrimaryIdx := -1
+	for i, p := range phases {
+		if p.name == "Configure new primary" {
+			configureNewPrimaryIdx = i
+			break
+		}
+	}
+	if configureNewPrimaryIdx == -1 {
+		t.Fatalf("could not find %q phase; has it been renamed?", "Configure new primary")
+	}
+
+	for i, p := range phases {
+		wantRollback := i < configureNewPrimaryIdx
+		if p.rollbackOnFailure != wantRollback {
+			t.Errorf("phase %q (index %d): rollbackOnFailure = %v, want %v (phases before %q must roll "+
+				"back on failure; %q and every phase after it must not, since the new primary may already "+
+				"be writable by then)", p.name, i, p.rollbackOnFailure, wantRollback,
+				"Configure new primary", "Configure new primary")
+		}
+	}
+
+	// waitSyncPhaseName specifically must be among the rollback-safe phases: handleWaitSyncFailure
+	// always calls rollbackSwitchover with restoreWriteAccess=true, on the assumption that "Wait
+	// sync" runs strictly before "Configure new primary".
+	waitSyncIdx := -1
+	for i, p := range phases {
+		if p.name == waitSyncPhaseName {
+			waitSyncIdx = i
+			break
+		}
+	}
+	if waitSyncIdx == -1 {
+		t.Fatalf("could not find %q phase; has it been renamed?", waitSyncPhaseName)
+	}
+	if waitSyncIdx >= configureNewPrimaryIdx {
+		t.Fatalf("%q (index %d) must run before %q (index %d); handleWaitSyncFailure assumes the new "+
+			"primary is never writable yet when it rolls back", waitSyncPhaseName, waitSyncIdx,
+			"Configure new primary", configureNewPrimaryIdx)
+	}
+
+	// Exactly one phase must be the resume point ("Connect replicas to new primary"), and it must
+	// come after "Configure new primary": resuming from it relies on the new primary already being
+	// configured (see the IsNewPrimaryConfigured check in reconcileSwitchover).
+	resumePointIdx := -1
+	for i, p := range phases {
+		if p.resumePoint {
+			if resumePointIdx != -1 {
+				t.Fatalf("more than one phase marked resumePoint: %q (index %d) and %q (index %d)",
+					phases[resumePointIdx].name, resumePointIdx, p.name, i)
+			}
+			resumePointIdx = i
+		}
+	}
+	if resumePointIdx == -1 {
+		t.Fatal("no phase marked resumePoint")
+	}
+	if resumePointIdx <= configureNewPrimaryIdx {
+		t.Errorf("resume point phase %q (index %d) must come after %q (index %d)",
+			phases[resumePointIdx].name, resumePointIdx, "Configure new primary", configureNewPrimaryIdx)
 	}
 }
