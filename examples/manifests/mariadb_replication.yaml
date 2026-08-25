@@ -61,9 +61,12 @@ spec:
     # It requires semi-synchronous replication to be enabled.
     # See: https://mariadb.com/kb/en/semisynchronous-replication/#rpl_semi_sync_master_wait_point.
     # semiSyncWaitPoint: AfterCommit
-    # Number of events after which the binary log will be synchronized to the disk.
+    # Number of events after which the binary log will be synchronized to the disk while the Pod acts as primary.
     # See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
-    # syncBinlog: 1
+    # syncBinlogPrimary: 1
+    # Number of events after which the binary log will be synchronized to the disk while the Pod acts as a replica.
+    # See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
+    # syncBinlogReplica: 5
     # Init container that cooperates with mariadb-operator.
     # initContainer:
     #   image: ghcr.io/mariadb-operator/mariadb-operator:26.6.0
