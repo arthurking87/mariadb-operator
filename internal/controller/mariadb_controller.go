@@ -35,6 +35,7 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/environment"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/health"
 	kadapter "github.com/mariadb-operator/mariadb-operator/v26/pkg/kubernetes/adapter"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metrics"
 	mdbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
 	sts "github.com/mariadb-operator/mariadb-operator/v26/pkg/statefulset"
@@ -130,6 +131,9 @@ func (r *MariaDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logger := log.FromContext(ctx).WithName("mariadb")
 	var mariadb mariadbv1alpha1.MariaDB
 	if err := r.Get(ctx, req.NamespacedName, &mariadb); err != nil {
+		if apierrors.IsNotFound(err) {
+			metrics.DeleteSwitchoverMetrics(req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	phases := []reconcilePhaseMariaDB{

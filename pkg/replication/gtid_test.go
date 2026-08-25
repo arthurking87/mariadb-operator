@@ -203,6 +203,122 @@ func TestParseGtid(t *testing.T) {
 	}
 }
 
+// TestParseGtidWithDomainId targets ParseGtidWithDomainId directly (as
+// opposed to TestParseGtid above, which primarily exercises ParseGtid).
+// Before the fix, the loop reassigned the outer rawGtid parameter to the
+// trimmed value of each part, but checked emptiness against the *untrimmed*
+// part. A part consisting solely of whitespace (e.g. a single space) is not
+// caught by `part == ""`, so it fell through to ParseGtid on the (already
+// trimmed-to-empty) value, which errors out and is logged at error level
+// instead of being cleanly skipped with an info-level "Ignoring empty GTID"
+// log. The fix introduces a properly scoped `trimmed` local, checks
+// `trimmed == ""`, and calls ParseGtid(trimmed).
+//
+// Note: for a whitespace-only part, both the old and fixed code end up
+// calling continue and moving on to the next part - the final returned
+// *Gtid/error from ParseGtidWithDomainId is identical in both versions; the
+// only observable difference is which log statement fires (Error vs Info).
+// The "whitespace-only part is skipped" case below therefore passes
+// identically whether or not the fix is applied - it is verified against
+// the old code manually rather than via a fail/pass test. These tests still
+// close a real coverage gap: ParseGtidWithDomainId previously had no
+// dedicated tests around whitespace handling.
+func TestParseGtidWithDomainId(t *testing.T) {
+	logger := logr.Discard()
+
+	tests := []struct {
+		name         string
+		input        string
+		gtidDomainId uint32
+		wantGtid     *Gtid
+		wantErr      bool
+	}{
+		{
+			name:         "whitespace-only part is skipped",
+			input:        "0-1-5, ,1-2-6",
+			gtidDomainId: 1,
+			wantGtid: &Gtid{
+				DomainID:   1,
+				ServerID:   2,
+				SequenceID: 6,
+			},
+			wantErr: false,
+		},
+		{
+			name:         "leading and trailing whitespace around parts is trimmed",
+			input:        " 2-9-10 , 3-1-2 ",
+			gtidDomainId: 2,
+			wantGtid: &Gtid{
+				DomainID:   2,
+				ServerID:   9,
+				SequenceID: 10,
+			},
+			wantErr: false,
+		},
+		{
+			name:         "truly empty part between commas is skipped",
+			input:        "0-1-5,,1-2-6",
+			gtidDomainId: 1,
+			wantGtid: &Gtid{
+				DomainID:   1,
+				ServerID:   2,
+				SequenceID: 6,
+			},
+			wantErr: false,
+		},
+		{
+			name:         "multiple whitespace-only parts mixed with valid ones",
+			input:        "  ,0-1-5,\t,1-2-6,   ",
+			gtidDomainId: 1,
+			wantGtid: &Gtid{
+				DomainID:   1,
+				ServerID:   2,
+				SequenceID: 6,
+			},
+			wantErr: false,
+		},
+		{
+			name:         "non-matching domain is ignored, domain not found",
+			input:        "0-1-5,1-2-6",
+			gtidDomainId: 9,
+			wantGtid:     nil,
+			wantErr:      true,
+		},
+		{
+			name:         "single GTID without comma delegates to ParseGtid",
+			input:        "3-4-5",
+			gtidDomainId: 3,
+			wantGtid: &Gtid{
+				DomainID:   3,
+				ServerID:   4,
+				SequenceID: 5,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseGtidWithDomainId(tc.input, tc.gtidDomainId, logger)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input %q, got nil and result %#v", tc.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for input %q: %v", tc.input, err)
+			}
+			if got == nil {
+				t.Fatalf("expected non-nil result for input %q", tc.input)
+			}
+			if got.DomainID != tc.wantGtid.DomainID || got.ServerID != tc.wantGtid.ServerID || got.SequenceID != tc.wantGtid.SequenceID {
+				t.Fatalf("parse mismatch for input %q: got %+v, want %+v", tc.input, got, tc.wantGtid)
+			}
+		})
+	}
+}
+
 func TestParseRawGtidInMetaFile(t *testing.T) {
 	tests := []struct {
 		name     string

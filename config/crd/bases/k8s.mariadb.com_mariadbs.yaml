@@ -4980,6 +4980,15 @@ spec:
                           node. The user may change this field to perform a manual
                           switchover.
                         type: integer
+                      switchoverTimeout:
+                        description: |-
+                          SwitchoverTimeout is the maximum cumulative duration allowed for the "wait for replica sync" phase
+                          of a switchover/failover to keep retrying, across reconciles, before giving up. It does not cover
+                          the other phases (locking the primary, promoting the new primary...), which have their own fixed
+                          per-attempt timeout instead. If this timeout is exceeded, the operator aborts the operation: it
+                          unlocks the primary, disables read_only, and reverts the desired primary back to the current one.
+                          It defaults to 60s.
+                        type: string
                     type: object
                   replica:
                     description: ReplicaReplication is the replication configuration
@@ -6102,7 +6111,10 @@ spec:
                   This can be useful for maintenance, as disabling the reconciliation prevents the operator from interfering with user operations during maintenance activities.
                 type: boolean
               terminationGracePeriodSeconds:
-                description: TerminationGracePeriodSeconds to be used in the Pod.
+                default: 30
+                description: |-
+                  TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is
+                  consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM.
                 format: int64
                 type: integer
               timeZone:
@@ -6802,6 +6814,14 @@ spec:
                 description: Replication is the replication current status per each
                   Pod.
                 properties:
+                  configHashes:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      ConfigHashes is the hash of the replication configuration that has been applied to each Pod.
+                      It is used to detect spec changes and reapply the replication configuration even when the
+                      replication role of the Pod has not changed.
+                    type: object
                   gtidStrictModePaused:
                     description: GtidStrictModePaused indicates that gtid_strict_mode
                       has been temporarily paused.

@@ -27,6 +27,10 @@ ha:
   enabled: false
   # -- Number of replicas
   replicas: 3
+# -- Leader election ID used to acquire the leader lock. Only takes effect when `ha.enabled` is true.
+# If not set, it defaults to a value scoped to the release name, so multiple releases in the same namespace
+# don't contend for the same lease. Set this explicitly if you need a stable, predictable value.
+leaderElectionID: ""
 # -- Specifies the amount of historic ReplicaSets k8s should keep (see https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#clean-up-policy)
 revisionHistoryLimit: 10
 # -- Set deployment strategy
@@ -247,6 +251,10 @@ certController:
     enabled: false
     # -- Number of replicas
     replicas: 3
+  # -- Leader election ID used to acquire the leader lock. Only takes effect when `certController.ha.enabled` is true.
+  # If not set, it defaults to a value scoped to the release name, so multiple releases in the same namespace
+  # don't contend for the same lease. Set this explicitly if you need a stable, predictable value.
+  leaderElectionID: ""
   # -- Specifies the amount of historic ReplicaSets k8s should keep (see https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#clean-up-policy)
   revisionHistoryLimit: 10
   # -- Set deployment strategy

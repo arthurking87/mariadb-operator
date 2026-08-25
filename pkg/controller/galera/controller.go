@@ -17,6 +17,7 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/service"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/environment"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
+	mdbreplic "github.com/mariadb-operator/mariadb-operator/v26/pkg/replication"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -231,13 +232,13 @@ func (r *GaleraReconciler) reconcileMultiCluster(ctx context.Context, mariadb *m
 			}
 			if err := replicaClient.StopSlave(
 				ctx,
-				sql.WithConnectionName(replication.MultiClusterReplicaConnectionName),
+				sql.WithConnectionName(mdbreplic.MultiClusterReplicaConnectionName),
 			); err != nil && !sql.IsConnectionNotExists(err) {
 				return ctrl.Result{}, fmt.Errorf("error stopping replica slave: %v", err)
 			}
 			if err := replicaClient.ResetSlave(
 				ctx,
-				sql.WithConnectionName(replication.MultiClusterReplicaConnectionName),
+				sql.WithConnectionName(mdbreplic.MultiClusterReplicaConnectionName),
 			); err != nil && !sql.IsConnectionNotExists(err) {
 				return ctrl.Result{}, fmt.Errorf("error resetting replica slave: %v", err)
 			}

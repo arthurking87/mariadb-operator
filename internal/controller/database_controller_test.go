@@ -68,8 +68,14 @@ var _ = Describe("Database on external MariaDB", func() {
 
 	It("should reconcile", func() {
 		By("Creating a Database")
+		// Deliberately distinct from the "database-create-test" name used by the sibling
+		// Describe("Database", ...) block above: both specs can run in the same `make
+		// test-int` invocation (Ginkgo randomizes spec order), and Delete() in a
+		// DeferCleanup only sets a deletionTimestamp — actual removal is async behind the
+		// finalizer. Sharing a name meant this spec's Create could race a still-finalizing
+		// Delete from the other spec and fail with a 409 "object is being deleted".
 		databaseKey := types.NamespacedName{
-			Name:      "database-create-test",
+			Name:      "database-external-create-test",
 			Namespace: testNamespace,
 		}
 		database := mariadbv1alpha1.Database{
