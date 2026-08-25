@@ -74,35 +74,15 @@ func shouldReconcileSwitchover(mdb *mariadbv1alpha1.MariaDB) bool {
 	return mdb.IsReplicationSwitchoverRequired()
 }
 
-func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *ReconcileRequest, switchoverLogger logr.Logger) error {
-	logger := switchoverLogger.WithValues("mariadb", req.mariadb.Name)
-
-	currentPrimaryReady, err := r.currentPrimaryReady(ctx, req.mariadb, req.replClientSet)
-	if err != nil {
-		return fmt.Errorf("error getting current primary readiness: %v", err)
-	}
-	req.currentPrimaryReady = currentPrimaryReady
-
-	if err := r.reconcileStaleSwitchover(ctx, req, logger); err != nil {
-		return fmt.Errorf("error reconciling stale switchover: %v", err)
-	}
-	if !shouldReconcileSwitchover(req.mariadb) {
-		return nil
-	}
-
-	replication := ptr.Deref(req.mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
-	primary := req.mariadb.Status.CurrentPrimaryPodIndex
-	newPrimary := *replication.Primary.PodIndex
-	newPrimaryPodName := statefulset.PodName(req.mariadb.ObjectMeta, *replication.Primary.PodIndex)
-	logger = logger.WithValues("primary", primary, "new-primary", newPrimary)
-
-	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
-		condition.SetPrimarySwitching(&req.mariadb.Status, newPrimaryPodName)
-	}); err != nil {
-		return fmt.Errorf("error patching MariaDB status: %v", err)
-	}
-
-	phases := []switchoverPhase{
+// switchoverPhases returns the ordered list of phases reconcileSwitchover runs through. Extracted
+// into its own function (rather than an inline literal) so the rollbackOnFailure/resumePoint
+// invariants below can be asserted directly in a unit test, without needing a full reconcile:
+//   - every phase up to and including "Wait sync" must have rollbackOnFailure true, since the old
+//     primary is still the only writable node up to that point;
+//   - "Configure new primary" and every phase after it must have rollbackOnFailure false, since the
+//     new primary may already be writable by the time any of them fails.
+func (r *ReplicationReconciler) switchoverPhases() []switchoverPhase {
+	return []switchoverPhase{
 		{
 			name:              "Lock primary with read lock",
 			reconcile:         r.lockPrimaryWithReadLock,
@@ -142,6 +122,37 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			rollbackOnFailure: false,
 		},
 	}
+}
+
+func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *ReconcileRequest, switchoverLogger logr.Logger) error {
+	logger := switchoverLogger.WithValues("mariadb", req.mariadb.Name)
+
+	currentPrimaryReady, err := r.currentPrimaryReady(ctx, req.mariadb, req.replClientSet)
+	if err != nil {
+		return fmt.Errorf("error getting current primary readiness: %v", err)
+	}
+	req.currentPrimaryReady = currentPrimaryReady
+
+	if err := r.reconcileStaleSwitchover(ctx, req, logger); err != nil {
+		return fmt.Errorf("error reconciling stale switchover: %v", err)
+	}
+	if !shouldReconcileSwitchover(req.mariadb) {
+		return nil
+	}
+
+	replication := ptr.Deref(req.mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
+	primary := req.mariadb.Status.CurrentPrimaryPodIndex
+	newPrimary := *replication.Primary.PodIndex
+	newPrimaryPodName := statefulset.PodName(req.mariadb.ObjectMeta, *replication.Primary.PodIndex)
+	logger = logger.WithValues("primary", primary, "new-primary", newPrimary)
+
+	if err := r.patchStatus(ctx, req.mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		condition.SetPrimarySwitching(&req.mariadb.Status, newPrimaryPodName)
+	}); err != nil {
+		return fmt.Errorf("error patching MariaDB status: %v", err)
+	}
+
+	phases := r.switchoverPhases()
 
 	if req.mariadb.IsNewPrimaryConfigured(newPrimaryPodName) {
 		// A previous attempt already got through "Configure new primary" before a later phase
