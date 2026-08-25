@@ -6,6 +6,7 @@ import (
 	"time"
 
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/replication"
 	mariadbpod "github.com/mariadb-operator/mariadb-operator/v26/pkg/pod"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/predicate"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
@@ -14,6 +15,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// noFailoverCandidateRequeueInterval bounds how long ReconcilePodNotReady's
+// replication.ErrNoFailoverCandidate is left unretried. Long enough not to hammer
+// FurthestAdvancedReplica's lookup in a tight loop while every replica is unhealthy, short enough
+// that failover picks back up promptly once one recovers.
+const noFailoverCandidateRequeueInterval = 15 * time.Second
 
 type PodReadinessController interface {
 	ReconcilePodReady(context.Context, corev1.Pod, *mariadbv1alpha1.MariaDB) error
@@ -68,6 +75,15 @@ func (r *PodController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			if errors.Is(err, ErrDelayAutomaticFailover) {
 				log.FromContext(ctx).V(1).Info("Delaying primary switchover. Skipping reconciliation of Pod in non Ready state", "pod", pod.Name)
 				return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+			}
+			if errors.Is(err, replication.ErrNoFailoverCandidate) {
+				// Requeue after a fixed delay instead of erroring out: returning the error here
+				// would hit the default rate-limited backoff, retrying the exact same failing
+				// lookup in a tight loop; returning ctrl.Result{} with a nil error (like the
+				// old behavior) would never requeue at all once this Pod's readiness stops
+				// changing (see the comment on this sentinel in ReconcilePodNotReady).
+				log.FromContext(ctx).V(1).Info("No failover candidate available yet, retrying later", "pod", pod.Name)
+				return ctrl.Result{RequeueAfter: noFailoverCandidateRequeueInterval}, nil
 			}
 			log.FromContext(ctx).V(1).Info("Error reconciling Pod in non Ready state", "pod", pod.Name)
 			return ctrl.Result{Requeue: true}, nil

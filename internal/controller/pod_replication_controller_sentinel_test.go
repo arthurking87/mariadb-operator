@@ -19,8 +19,13 @@ import (
 // This file tests ReconcilePodNotReady's handling of the two kinds of errors that can come
 // back from FurthestAdvancedReplica:
 //   - replication.ErrNoFailoverCandidate: expected when no replica is currently healthy
-//     enough to promote. Must be swallowed (no error returned), logged, and turned into a
-//     Warning Event, so the caller keeps monitoring instead of requeuing-with-backoff.
+//     enough to promote. Logged and turned into a Warning Event either way, but propagated as
+//     an error rather than swallowed: PodController.Reconcile (see pod_controller.go) turns
+//     this specific sentinel into a bounded RequeueAfter, so failover keeps getting retried.
+//     Returning nil here would make PodController.Reconcile return ctrl.Result{} with no
+//     requeue at all, and since its watch predicate only fires on a Pod readiness transition,
+//     nothing would ever re-trigger this reconcile once the primary Pod's readiness stops
+//     changing — failover would get stuck monitoring forever (see issue #79).
 //   - any other error (e.g. a transient failure listing secondary Pods): must be propagated
 //     unchanged so the caller requeues-with-backoff and retries.
 //
@@ -30,7 +35,7 @@ import (
 // tests specifically with:
 //   go test ./internal/controller/... -run TestReconcilePodNotReady -v
 
-// recordedEvent captures a single call to fakeEventRecorder.Eventf.
+// recordedEvent captures a single call to sentinelEventRecorder.Eventf.
 type recordedEvent struct {
 	eventtype string
 	reason    string
@@ -38,13 +43,13 @@ type recordedEvent struct {
 	note      string
 }
 
-// fakeEventRecorder is a minimal events.EventRecorder that records Eventf calls instead of
+// sentinelEventRecorder is a minimal events.EventRecorder that records Eventf calls instead of
 // emitting real Kubernetes Events.
-type fakeEventRecorder struct {
+type sentinelEventRecorder struct {
 	events []recordedEvent
 }
 
-func (f *fakeEventRecorder) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
+func (f *sentinelEventRecorder) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
 	f.events = append(f.events, recordedEvent{
 		eventtype: eventtype,
 		reason:    reason,
@@ -122,23 +127,28 @@ func newSentinelTestPrimaryPod(namespace string) corev1.Pod {
 	}
 }
 
-// TestReconcilePodNotReady_NoFailoverCandidateIsSwallowed proves that when
+// TestReconcilePodNotReady_NoFailoverCandidatePropagatesSentinel proves that when
 // FurthestAdvancedReplica returns replication.ErrNoFailoverCandidate (no secondary Pods to
-// promote), ReconcilePodNotReady does NOT return an error: it keeps the current primary and
-// emits a Warning Event with reason ReasonNoFailoverCandidate instead. If this regressed to
-// treating the sentinel like any other error, this test would see a non-nil error returned.
-func TestReconcilePodNotReady_NoFailoverCandidateIsSwallowed(t *testing.T) {
+// promote), ReconcilePodNotReady still emits a Warning Event with reason
+// ReasonNoFailoverCandidate, but now returns that sentinel error rather than swallowing it (see
+// the file-level comment for why swallowing it was a bug). errors.Is must hold so
+// PodController.Reconcile can single it out for its own bounded-requeue handling instead of the
+// generic requeue-with-backoff path.
+func TestReconcilePodNotReady_NoFailoverCandidatePropagatesSentinel(t *testing.T) {
 	scheme := newSentinelTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	recorder := &fakeEventRecorder{}
-	ctrl := NewPodReplicationController(c, recorder)
+	recorder := &sentinelEventRecorder{}
+	ctrl := NewPodReplicationController(c, recorder, nil)
 
 	mdb := newSentinelTestMariaDB("test-ns")
 	pod := newSentinelTestPrimaryPod("test-ns")
 
 	err := ctrl.ReconcilePodNotReady(context.Background(), pod, mdb)
-	if err != nil {
-		t.Fatalf("expected no error when no failover candidate exists, got: %v", err)
+	if err == nil {
+		t.Fatal("expected ReconcilePodNotReady to propagate an error when no failover candidate exists, got nil")
+	}
+	if !errors.Is(err, replication.ErrNoFailoverCandidate) {
+		t.Errorf("expected errors.Is(err, replication.ErrNoFailoverCandidate) to hold, got: %v", err)
 	}
 
 	if len(recorder.events) != 1 {
@@ -164,8 +174,8 @@ func TestReconcilePodNotReady_TransientLookupErrorIsPropagated(t *testing.T) {
 	base := fake.NewClientBuilder().WithScheme(scheme).Build()
 	injected := errors.New("connection refused")
 	c := &listErrorClient{Client: base, err: injected}
-	recorder := &fakeEventRecorder{}
-	ctrl := NewPodReplicationController(c, recorder)
+	recorder := &sentinelEventRecorder{}
+	ctrl := NewPodReplicationController(c, recorder, nil)
 
 	mdb := newSentinelTestMariaDB("test-ns")
 	pod := newSentinelTestPrimaryPod("test-ns")

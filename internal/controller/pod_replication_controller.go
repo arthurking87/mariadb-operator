@@ -128,15 +128,22 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 			// FurthestAdvancedReplica already filters out replicas with a dead
 			// IO/SQL thread, unset GTID position, or relay log events still
 			// pending (see findCandidates in failover.go) — if it comes back
-			// empty, every replica is currently unhealthy too. Returning an error
-			// here would make the caller requeue-with-backoff and retry this
-			// exact same failing lookup on a tight loop. Since CurrentPrimaryFailingSince
-			// stays set, we keep monitoring and will attempt failover again on
-			// the next reconcile without erroring out in the meantime.
+			// empty, every replica is currently unhealthy too. CurrentPrimaryFailingSince
+			// stays set, so we keep monitoring and will attempt failover again
+			// later, but propagate the sentinel error rather than swallowing it
+			// (returning nil here): with no error, the caller (PodController.Reconcile)
+			// returns ctrl.Result{} with no requeue, and once this Pod's readiness
+			// stops changing, PodController's watch predicate (podHasChanged) means
+			// nothing else re-triggers this reconcile either — a replica recovering
+			// triggers its OWN reconcile via ReconcilePodReady, not this primary Pod's.
+			// Failover would be stuck forever until something else about this exact
+			// Pod object changes. PodController.Reconcile requeues on this sentinel
+			// after a fixed delay (see noFailoverCandidateRequeueInterval), the same
+			// pattern already used for ErrDelayAutomaticFailover below.
 			logger.Info("No viable failover candidate found, keeping current primary", "primary", *primary, "reason", err.Error())
 			r.recorder.Eventf(mariadb, nil, corev1.EventTypeWarning, mariadbv1alpha1.ReasonNoFailoverCandidate, mariadbv1alpha1.ActionReconciling,
 				"No viable failover candidate found for primary '%d': %v", *primary, err)
-			return nil
+			return err
 		}
 		// Any other error (e.g. failing to list secondary Pods) is a transient lookup
 		// failure, not evidence that every replica is unhealthy — propagate it so the
