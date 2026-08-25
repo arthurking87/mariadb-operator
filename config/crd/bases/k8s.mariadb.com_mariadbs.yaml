@@ -4458,6 +4458,14 @@ spec:
                           type: object
                         type: array
                     type: object
+                  autoServerId:
+                    description: |-
+                      AutoServerID determines whether the operator should auto-compute server_id from the Pod ordinal and ServerIDStartIndex.
+                      It is enabled by default. Disable it if you manage server_id externally.
+                      It is immutable, like ServerIDStartIndex: toggling it on a running replication cluster
+                      would change server_id underneath already-configured nodes, risking a server_id
+                      collision or replication history inconsistency.
+                    type: boolean
                   enabled:
                     description: Enabled is a flag to enable replication.
                     type: boolean
@@ -4929,6 +4937,30 @@ spec:
                     required:
                     - image
                     type: object
+                  innodbFlushLogAtTrxCommitPrimary:
+                    default: 1
+                    description: |-
+                      InnodbFlushLogAtTrxCommitPrimary controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as primary.
+                      The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
+                      See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
+                    enum:
+                    - 0
+                    - 1
+                    - 2
+                    format: int32
+                    type: integer
+                  innodbFlushLogAtTrxCommitReplica:
+                    default: 2
+                    description: |-
+                      InnodbFlushLogAtTrxCommitReplica controls the innodb_flush_log_at_trx_commit durability/throughput trade-off while the Pod acts as a replica.
+                      The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
+                      See: https://mariadb.com/docs/server/server-management/variables#innodb_flush_log_at_trx_commit
+                    enum:
+                    - 0
+                    - 1
+                    - 2
+                    format: int32
+                    type: integer
                   primary:
                     description: Primary is the replication configuration for the
                       primary node.
@@ -5429,10 +5461,23 @@ spec:
                       StandaloneProbes indicates whether to use the default non-HA startup and liveness probes.
                       It is disabled by default
                     type: boolean
-                  syncBinlog:
+                  syncBinlogPrimary:
+                    default: 1
                     description: |-
-                      SyncBinlog indicates after how many events the binary log is synchronized to the disk.
+                      SyncBinlogPrimary indicates after how many events the binary log is synchronized to disk while the Pod acts as primary.
+                      The operator applies this value at runtime when promoting a Pod to primary, see pkg/controller/replication/topology.go.
                       See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  syncBinlogReplica:
+                    default: 5
+                    description: |-
+                      SyncBinlogReplica indicates after how many events the binary log is synchronized to disk while the Pod acts as a replica.
+                      The operator applies this value at runtime when demoting a Pod to replica, see pkg/controller/replication/topology.go.
+                      See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/replication-and-binary-log-system-variables#sync_binlog
+                    format: int32
+                    minimum: 0
                     type: integer
                 type: object
               resources:

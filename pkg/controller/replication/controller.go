@@ -296,21 +296,29 @@ func (r *ReplicationReconciler) ReconcileReplicationInPod(ctx context.Context, r
 // ConfigurePrimary/ConfigureReplica (CHANGE MASTER TO and related SQL statements). It is hashed
 // and stored per-Pod so spec changes can be detected and re-applied independently of role changes.
 type replicationConfigFields struct {
-	Port                     int32
-	TLSEnabled               bool
-	Gtid                     mariadbv1alpha1.Gtid
-	ConnectionRetrySeconds   *int
-	ReplPasswordSecretKeyRef *mariadbv1alpha1.GeneratedSecretKeyRef
+	Port                             int32
+	TLSEnabled                       bool
+	Gtid                             mariadbv1alpha1.Gtid
+	ConnectionRetrySeconds           *int
+	ReplPasswordSecretKeyRef         *mariadbv1alpha1.GeneratedSecretKeyRef
+	SyncBinlogPrimary                int32
+	InnodbFlushLogAtTrxCommitPrimary int32
+	SyncBinlogReplica                int32
+	InnodbFlushLogAtTrxCommitReplica int32
 }
 
 func replicationConfigHash(mariadb *mariadbv1alpha1.MariaDB) (string, error) {
 	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
 	fields := replicationConfigFields{
-		Port:                     mariadb.Spec.Port,
-		TLSEnabled:               mariadb.IsTLSEnabled(),
-		Gtid:                     ptr.Deref(replication.Replica.Gtid, mariadbv1alpha1.GtidCurrentPos),
-		ConnectionRetrySeconds:   replication.Replica.ConnectionRetrySeconds,
-		ReplPasswordSecretKeyRef: replication.Replica.ReplPasswordSecretKeyRef,
+		Port:                             mariadb.Spec.Port,
+		TLSEnabled:                       mariadb.IsTLSEnabled(),
+		Gtid:                             ptr.Deref(replication.Replica.Gtid, mariadbv1alpha1.GtidCurrentPos),
+		ConnectionRetrySeconds:           replication.Replica.ConnectionRetrySeconds,
+		ReplPasswordSecretKeyRef:         replication.Replica.ReplPasswordSecretKeyRef,
+		SyncBinlogPrimary:                replication.GetSyncBinlogPrimary(),
+		InnodbFlushLogAtTrxCommitPrimary: replication.GetInnodbFlushLogAtTrxCommitPrimary(),
+		SyncBinlogReplica:                replication.GetSyncBinlogReplica(),
+		InnodbFlushLogAtTrxCommitReplica: replication.GetInnodbFlushLogAtTrxCommitReplica(),
 	}
 	return hash.HashJSON(fields)
 }

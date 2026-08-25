@@ -35,20 +35,35 @@ func NewReplicationConfig(env *env.PodEnvironment) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting semi-sync master timeout: %v", err)
 	}
+	autoServerID, err := env.ReplAutoServerID()
+	if err != nil {
+		return nil, fmt.Errorf("error getting auto server ID: %v", err)
+	}
 	serverIDStartIndex, err := serverIDStartIndex(env.MariaDBReplServerIDStartIndex)
 	if err != nil {
 		return nil, fmt.Errorf("error getting server ID start index: %v", err)
 	}
-	serverID, err := serverId(env.PodName, serverIDStartIndex)
-	if err != nil {
-		return nil, fmt.Errorf("error getting server ID: %v", err)
+	var serverID *int
+	if autoServerID {
+		id, err := serverId(env.PodName, serverIDStartIndex)
+		if err != nil {
+			return nil, fmt.Errorf("error getting server ID: %v", err)
+		}
+		serverID = &id
 	}
-	syncBinlog, err := env.ReplSyncBinlog()
+	syncBinlogPrimary, err := env.ReplSyncBinlogPrimary()
 	if err != nil {
-		return nil, fmt.Errorf("error getting master sync binlog: %v", err)
+		return nil, fmt.Errorf("error getting primary sync_binlog: %v", err)
+	}
+	innodbFlushLogAtTrxCommitPrimary, err := env.ReplInnodbFlushLogAtTrxCommitPrimary()
+	if err != nil {
+		return nil, fmt.Errorf("error getting primary innodb_flush_log_at_trx_commit: %v", err)
 	}
 
-	// To facilitate switchover/failover and avoid clashing with MaxScale, this configuration allows any Pod to act either as a primary or a replica.
+	// To facilitate switchover/failover and avoid clashing with MaxScale, this configuration boots every Pod into
+	// the symmetric semi-sync / primary-durability setting; the operator then narrows it to the role-appropriate
+	// setting (semi-sync master ON/slave OFF, and the replica sync_binlog/innodb_flush_log_at_trx_commit values,
+	// on replicas) at runtime as part of promoting/demoting the Pod, see pkg/controller/replication/topology.go.
 	// See: https://mariadb.com/docs/server/ha-and-performance/standard-replication/semisynchronous-replication#enabling-semisynchronous-replication
 	tpl := createTpl("replication", `[mariadb]
 log_bin
@@ -69,30 +84,33 @@ rpl_semi_sync_master_timeout={{ . }}
 rpl_semi_sync_master_wait_point={{ . }}
 {{- end }}
 {{- end }}
-server_id={{ .ServerID }}
-{{- with .SyncBinlog }}
-sync_binlog={{ . }}
+{{- with .ServerID }}
+server_id={{ . }}
 {{- end }}
+sync_binlog={{ .SyncBinlogPrimary }}
+innodb_flush_log_at_trx_commit={{ .InnodbFlushLogAtTrxCommitPrimary }}
 `)
 	buf := new(bytes.Buffer)
 	err = tpl.Execute(buf, struct {
-		LogName                 string
-		GtidStrictMode          bool
-		GtidDomainID            *int
-		SemiSyncEnabled         bool
-		SemiSyncMasterTimeout   *int64
-		SemiSyncMasterWaitPoint string
-		SyncBinlog              *int
-		ServerID                int
+		LogName                          string
+		GtidStrictMode                   bool
+		GtidDomainID                     *int
+		SemiSyncEnabled                  bool
+		SemiSyncMasterTimeout            *int64
+		SemiSyncMasterWaitPoint          string
+		ServerID                         *int
+		SyncBinlogPrimary                int32
+		InnodbFlushLogAtTrxCommitPrimary int32
 	}{
-		LogName:                 env.MariadbName,
-		GtidStrictMode:          gtidStrictMode,
-		GtidDomainID:            gtidDomainID,
-		SemiSyncEnabled:         semiSyncEnabled,
-		SemiSyncMasterTimeout:   semiSyncMasterTimeout,
-		SemiSyncMasterWaitPoint: env.MariaDBReplSemiSyncMasterWaitPoint,
-		ServerID:                serverID,
-		SyncBinlog:              syncBinlog,
+		LogName:                          env.MariadbName,
+		GtidStrictMode:                   gtidStrictMode,
+		GtidDomainID:                     gtidDomainID,
+		SemiSyncEnabled:                  semiSyncEnabled,
+		SemiSyncMasterTimeout:            semiSyncMasterTimeout,
+		SemiSyncMasterWaitPoint:          env.MariaDBReplSemiSyncMasterWaitPoint,
+		ServerID:                         serverID,
+		SyncBinlogPrimary:                syncBinlogPrimary,
+		InnodbFlushLogAtTrxCommitPrimary: innodbFlushLogAtTrxCommitPrimary,
 	})
 	if err != nil {
 		return nil, err

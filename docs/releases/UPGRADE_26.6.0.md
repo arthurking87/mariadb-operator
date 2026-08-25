@@ -33,6 +33,23 @@ helm repo update mariadb-operator
 helm upgrade --install mariadb-operator mariadb-operator/mariadb-operator --version 26.6.0
 ```
 
+- If you are using replication, and you have the `spec.replication.syncBinlog` field set, some breaking changes have been introduced that affect you: it has been replaced by `syncBinlogPrimary`/`syncBinlogReplica`, applied by the operator to the currently promoted primary and to replicas respectively (see [replication configuration](../replication.md#configuration)). This CRD upgrade does not migrate the old value for you — it is silently discarded, and the new fields default to `syncBinlogPrimary=1`/`syncBinlogReplica=5` if left unset.
+
+Please perform the following migration on the `spec.replication.syncBinlog` field:
+- If you previously relied on a single `syncBinlog=<number>` for all nodes, set both `syncBinlogPrimary=<number>` and `syncBinlogReplica=<number>` to keep the previous behavior, or leave them unset to adopt the new defaults (`1` on primary for durability, `5` on replicas for throughput).
+
+```diff
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb
+spec:
+  replication:
+-    syncBinlog: 1
++    syncBinlogPrimary: 1
++    syncBinlogReplica: 1
+```
+
 - Consider reverting `updateStrategy.autoUpdateDataPlane` back to `false` in your `MariaDB` object to avoid unexpected updates:
 
 ```diff

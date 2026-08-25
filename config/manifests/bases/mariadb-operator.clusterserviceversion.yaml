@@ -2561,13 +2561,23 @@ spec:
           before committing to the storage engine. More info: https://mariadb.com/kb/en/semisynchronous-replication/#rpl_semi_sync_master_wait_point.'
         displayName: Wait Point
         path: replication.replica.waitPoint
-      - description: 'SyncBinlog indicates whether the binary log should be synchronized
-          to the disk after every event. It trades off performance for consistency.
+      - description: 'SyncBinlogPrimary indicates after how many events the binary
+          log is synchronized to disk while the Pod acts as primary. It trades off
+          performance for consistency.
           See: https://mariadb.com/kb/en/replication-and-binary-log-system-variables/#sync_binlog.'
-        displayName: Sync Binlog
-        path: replication.syncBinlog
+        displayName: Sync Binlog Primary
+        path: replication.syncBinlogPrimary
         x-descriptors:
-        - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+        - urn:alm:descriptor:com.tectonic.ui:number
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+      - description: 'SyncBinlogReplica indicates after how many events the binary
+          log is synchronized to disk while the Pod acts as a replica. It trades off
+          performance for consistency.
+          See: https://mariadb.com/kb/en/replication-and-binary-log-system-variables/#sync_binlog.'
+        displayName: Sync Binlog Replica
+        path: replication.syncBinlogReplica
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:number
         - urn:alm:descriptor:com.tectonic.ui:advanced
       - description: Resouces describes the compute resource requirements.
         displayName: Resources

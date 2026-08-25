@@ -4429,6 +4429,11 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 		*out = new(int)
 		**out = **in
 	}
+	if in.AutoServerID != nil {
+		in, out := &in.AutoServerID, &out.AutoServerID
+		*out = new(bool)
+		**out = **in
+	}
 	if in.SemiSyncEnabled != nil {
 		in, out := &in.SemiSyncEnabled, &out.SemiSyncEnabled
 		*out = new(bool)
@@ -4444,9 +4449,24 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 		*out = new(WaitPoint)
 		**out = **in
 	}
-	if in.SyncBinlog != nil {
-		in, out := &in.SyncBinlog, &out.SyncBinlog
-		*out = new(int)
+	if in.SyncBinlogPrimary != nil {
+		in, out := &in.SyncBinlogPrimary, &out.SyncBinlogPrimary
+		*out = new(int32)
+		**out = **in
+	}
+	if in.InnodbFlushLogAtTrxCommitPrimary != nil {
+		in, out := &in.InnodbFlushLogAtTrxCommitPrimary, &out.InnodbFlushLogAtTrxCommitPrimary
+		*out = new(int32)
+		**out = **in
+	}
+	if in.SyncBinlogReplica != nil {
+		in, out := &in.SyncBinlogReplica, &out.SyncBinlogReplica
+		*out = new(int32)
+		**out = **in
+	}
+	if in.InnodbFlushLogAtTrxCommitReplica != nil {
+		in, out := &in.InnodbFlushLogAtTrxCommitReplica, &out.InnodbFlushLogAtTrxCommitReplica
+		*out = new(int32)
 		**out = **in
 	}
 	in.InitContainer.DeepCopyInto(&out.InitContainer)

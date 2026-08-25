@@ -70,6 +70,39 @@ func TestReplicationConfigHash(t *testing.T) {
 			},
 			wantEqual: false,
 		},
+		{
+			// Regression test: syncBinlogPrimary/syncBinlogReplica/innodbFlushLogAtTrxCommitPrimary/
+			// innodbFlushLogAtTrxCommitReplica are applied via ConfigurePrimary/ConfigureReplica
+			// (see setPrimaryDurability/setReplicaDurability in topology.go), so changing them must
+			// be reflected in the hash, otherwise configChanged stays false and the new values only
+			// take effect on the next switchover/failover.
+			name: "syncBinlogPrimary changed",
+			mutate: func(m *mariadbv1alpha1.MariaDB) {
+				m.Spec.Replication.SyncBinlogPrimary = ptr.To(int32(0))
+			},
+			wantEqual: false,
+		},
+		{
+			name: "syncBinlogReplica changed",
+			mutate: func(m *mariadbv1alpha1.MariaDB) {
+				m.Spec.Replication.SyncBinlogReplica = ptr.To(int32(0))
+			},
+			wantEqual: false,
+		},
+		{
+			name: "innodbFlushLogAtTrxCommitPrimary changed",
+			mutate: func(m *mariadbv1alpha1.MariaDB) {
+				m.Spec.Replication.InnodbFlushLogAtTrxCommitPrimary = ptr.To(int32(2))
+			},
+			wantEqual: false,
+		},
+		{
+			name: "innodbFlushLogAtTrxCommitReplica changed",
+			mutate: func(m *mariadbv1alpha1.MariaDB) {
+				m.Spec.Replication.InnodbFlushLogAtTrxCommitReplica = ptr.To(int32(0))
+			},
+			wantEqual: false,
+		},
 	}
 
 	for _, tt := range tests {

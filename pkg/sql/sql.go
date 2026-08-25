@@ -738,6 +738,30 @@ func (c *Client) DisableReadOnly(ctx context.Context) error {
 	return c.SetSystemVariable(ctx, "read_only", "0")
 }
 
+func (c *Client) EnableSemiSyncMaster(ctx context.Context) error {
+	return c.SetSystemVariable(ctx, "rpl_semi_sync_master_enabled", "1")
+}
+
+func (c *Client) DisableSemiSyncMaster(ctx context.Context) error {
+	return c.SetSystemVariable(ctx, "rpl_semi_sync_master_enabled", "0")
+}
+
+func (c *Client) EnableSemiSyncSlave(ctx context.Context) error {
+	return c.SetSystemVariable(ctx, "rpl_semi_sync_slave_enabled", "1")
+}
+
+func (c *Client) DisableSemiSyncSlave(ctx context.Context) error {
+	return c.SetSystemVariable(ctx, "rpl_semi_sync_slave_enabled", "0")
+}
+
+func (c *Client) SetSyncBinlog(ctx context.Context, value int32) error {
+	return c.SetSystemVariable(ctx, "sync_binlog", strconv.Itoa(int(value)))
+}
+
+func (c *Client) SetInnodbFlushLogAtTrxCommit(ctx context.Context, value int32) error {
+	return c.SetSystemVariable(ctx, "innodb_flush_log_at_trx_commit", strconv.Itoa(int(value)))
+}
+
 func (c *Client) ResetMaster(ctx context.Context) error {
 	return c.Exec(ctx, "RESET MASTER;")
 }

@@ -604,6 +604,12 @@ func mariadbReplEnv(mariadb *mariadbv1alpha1.MariaDB) ([]corev1.EnvVar, error) {
 			Value: strconv.Itoa(*mariadb.Spec.Replication.ServerIDStartIndex),
 		})
 	}
+	if !replication.IsAutoServerIDEnabled() {
+		env = append(env, corev1.EnvVar{
+			Name:  "MARIADB_REPL_AUTO_SERVER_ID",
+			Value: fmt.Sprint(false),
+		})
+	}
 	if replication.IsSemiSyncEnabled() {
 		env = append(env, corev1.EnvVar{
 			Name:  "MARIADB_REPL_SEMI_SYNC_ENABLED",
@@ -626,12 +632,17 @@ func mariadbReplEnv(mariadb *mariadbv1alpha1.MariaDB) ([]corev1.EnvVar, error) {
 			})
 		}
 	}
-	if replication.SyncBinlog != nil {
-		env = append(env, corev1.EnvVar{
-			Name:  "MARIADB_REPL_SYNC_BINLOG",
-			Value: fmt.Sprintf("%d", *replication.SyncBinlog),
-		})
-	}
+	// Only the primary values are needed here: my.cnf boots every Pod into the primary/safe durability setting,
+	// the operator then relaxes it to the replica values at runtime when demoting a Pod, reading them directly
+	// off the MariaDB spec rather than through env vars, see pkg/controller/replication/topology.go.
+	env = append(env, corev1.EnvVar{
+		Name:  "MARIADB_REPL_SYNC_BINLOG_PRIMARY",
+		Value: strconv.Itoa(int(replication.GetSyncBinlogPrimary())),
+	})
+	env = append(env, corev1.EnvVar{
+		Name:  "MARIADB_REPL_INNODB_FLUSH_LOG_AT_TRX_COMMIT_PRIMARY",
+		Value: strconv.Itoa(int(replication.GetInnodbFlushLogAtTrxCommitPrimary())),
+	})
 	return env, nil
 }
 
