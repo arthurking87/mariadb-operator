@@ -34,7 +34,17 @@ var (
 // caller didn't already attach a deadline to its context. Without this,
 // Exec/Query/QueryRow can hang indefinitely against a half-open TCP
 // connection (e.g. a Pod that went away without closing the socket).
+// go-sql-driver/mysql honors context cancellation by tearing down the
+// underlying connection, so this alone is what actually recovers a hung
+// call — there's no separate liveness check involved (see Ping).
 const defaultQueryTimeout = 10 * time.Second
+
+// lockDefaultTimeout is the default used for LockTablesWithReadLock instead of
+// defaultQueryTimeout: acquiring FLUSH TABLES WITH READ LOCK can legitimately take a while on a
+// busy primary, since it has to wait for in-flight statements to finish first. Capping that at the
+// generic 10s default would turn an ordinary "busy but succeeds shortly after" wait into a hard
+// failure. Callers with a tighter budget can still override this by attaching their own deadline.
+const lockDefaultTimeout = 60 * time.Second
 
 // gtidWaitGracePeriod is added on top of the caller-supplied timeout when
 // waiting for MASTER_GTID_WAIT, so the Go-level context deadline always
@@ -48,10 +58,17 @@ const gtidWaitGracePeriod = 5 * time.Second
 // otherwise it attaches defaultQueryTimeout. The returned cancel func must
 // always be called by the caller.
 func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return withTimeoutDefault(ctx, defaultQueryTimeout)
+}
+
+// withTimeoutDefault behaves like withTimeout, but lets the caller pick the default applied when
+// ctx has no deadline of its own, for operations (like LockTablesWithReadLock) that need a
+// different default than defaultQueryTimeout.
+func withTimeoutDefault(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if _, ok := ctx.Deadline(); ok {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, defaultQueryTimeout)
+	return context.WithTimeout(ctx, timeout)
 }
 
 type Opts struct {
@@ -393,8 +410,13 @@ func (c *Client) Close() error {
 	return c.db.Close()
 }
 
-// Ping checks that the underlying connection is alive, failing fast instead
-// of letting a subsequent Exec/Query hang against a dead connection.
+// Ping checks that the underlying connection pool can reach the database, for callers that want an
+// explicit liveness check (e.g. a readiness probe). It does NOT guarantee anything about a
+// subsequent Exec/Query/QueryRow call: c.db is a connection pool, so the connection Ping checks out
+// and the one a later call gets are not guaranteed to be the same connection — a dead connection can
+// still be handed to that later call regardless of what Ping just reported. Exec/Query/QueryRow
+// don't call this for that reason; they rely solely on their context deadline (see
+// defaultQueryTimeout), which go-sql-driver/mysql honors by tearing down a hung connection.
 func (c *Client) Ping(ctx context.Context) error {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
@@ -404,35 +426,29 @@ func (c *Client) Ping(ctx context.Context) error {
 // Exec fully resolves before returning (ExecContext blocks until done), so
 // it's safe to cancel the timeout context as soon as the call completes.
 func (c *Client) Exec(ctx context.Context, sql string, args ...any) error {
-	if err := c.Ping(ctx); err != nil {
-		return fmt.Errorf("error pinging database: %v", err)
-	}
-	ctx, cancel := withTimeout(ctx)
+	return c.execWithTimeout(ctx, defaultQueryTimeout, sql, args...)
+}
+
+func (c *Client) execWithTimeout(ctx context.Context, timeout time.Duration, sql string, args ...any) error {
+	ctx, cancel := withTimeoutDefault(ctx, timeout)
 	defer cancel()
 	_, err := c.db.ExecContext(ctx, sql, args...)
 	return err
 }
 
-// Query deliberately does NOT apply withTimeout's self-expiring deadline:
-// the returned *sql.Rows is consumed by the caller afterwards (Next/Scan),
-// and database/sql can discard the underlying pooled connection out from
-// under unrelated callers once a Query's context expires - even after the
-// rows have already been fully read and closed. Ping below already fails
-// fast against a dead connection, and the caller's own ctx (if it carries a
-// deadline) still applies as-is.
+// Query, like QueryRow below, deliberately does NOT cancel its derived timeout context before
+// returning: the returned *sql.Rows is consumed by the caller afterwards (Next/Scan), and canceling
+// early would abort the still-open cursor before it's read. The timeout context expires on its own
+// after defaultQueryTimeout if the caller didn't set a shorter deadline, which also bounds how long
+// the caller may take consuming the rows before the borrowed connection is reclaimed — that's
+// intentional, not just a tolerated side effect: a caller stuck slowly iterating rows would
+// otherwise hold a pooled connection indefinitely.
 func (c *Client) Query(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
-	if err := c.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("error pinging database: %v", err)
-	}
-	return c.db.QueryContext(ctx, sql, args...)
+	qctx, _ := withTimeout(ctx)
+	return c.db.QueryContext(qctx, sql, args...)
 }
 
-// QueryRow deliberately does NOT cancel its derived timeout context before
-// returning: the returned *sql.Row is consumed by the caller afterwards
-// (Scan), and canceling early would abort the still-open cursor before it's
-// read. The timeout context expires on its own after defaultQueryTimeout if
-// the caller didn't set a shorter deadline, so this doesn't leak past that
-// bound.
+// QueryRow: see the design note on Query above; the same reasoning applies here.
 func (c *Client) QueryRow(ctx context.Context, sql string, args ...any) *sql.Row {
 	qctx, _ := withTimeout(ctx)
 	return c.db.QueryRowContext(qctx, sql, args...)
@@ -774,7 +790,7 @@ func (c *Client) SetSystemVariable(ctx context.Context, variable string, value s
 }
 
 func (c *Client) LockTablesWithReadLock(ctx context.Context) error {
-	return c.Exec(ctx, "FLUSH TABLES WITH READ LOCK;")
+	return c.execWithTimeout(ctx, lockDefaultTimeout, "FLUSH TABLES WITH READ LOCK;")
 }
 
 func (c *Client) UnlockTables(ctx context.Context) error {
