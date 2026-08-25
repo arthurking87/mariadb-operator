@@ -1,6 +1,7 @@
 package scheduledcheck
 
 import (
+	"errors"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,5 +62,19 @@ func TestParseUnixTimestamp(t *testing.T) {
 
 	if _, err := parseUnixTimestamp("not-a-number"); err == nil {
 		t.Error("want error for non-numeric input, got nil")
+	}
+}
+
+// TestParseUnixTimestamp_NilIsAbsentNotAnError is a regression test: password_last_changed is
+// legitimately absent for accounts using a non-password auth plugin (e.g. unix_socket for
+// root@localhost), which checkRootPasswordAge must treat as "skip this account", not as a check
+// failure to report on PodRootPasswordFreshGauge.
+func TestParseUnixTimestamp_NilIsAbsentNotAnError(t *testing.T) {
+	_, err := parseUnixTimestamp(nil)
+	if err == nil {
+		t.Fatal("want a sentinel error for a nil value, got nil error")
+	}
+	if !errors.Is(err, errPasswordLastChangedAbsent) {
+		t.Errorf("want errors.Is(err, errPasswordLastChangedAbsent) to hold, got: %v", err)
 	}
 }

@@ -95,7 +95,8 @@ var (
 	syncPeriod       time.Duration
 	cacheSyncTimeout time.Duration
 
-	scheduledCheckInterval time.Duration
+	scheduledCheckInterval     time.Duration
+	scheduledCheckRootPwMaxAge time.Duration
 
 	webhookEnabled bool
 	webhookPort    int
@@ -171,6 +172,8 @@ func init() {
 	rootCmd.Flags().DurationVar(&scheduledCheckInterval, "scheduled-check-interval", 120*time.Second,
 		"The interval at which the scheduled health check (CRD/Pod status, GTID domain id consistency, "+
 			"root password age) runs. Only runs on the leader replica.")
+	rootCmd.Flags().DurationVar(&scheduledCheckRootPwMaxAge, "root-password-max-age", scheduledcheck.DefaultRootPasswordMaxAge,
+		"The max age after which the scheduled health check reports a MariaDB root password as stale.")
 
 	rootCmd.Flags().BoolVar(&webhookEnabled, "webhook", false, "Enable the webhook server.")
 	rootCmd.Flags().IntVar(&webhookPort, "webhook-port", 9443, "Port to be used by the webhook server."+
@@ -299,13 +302,14 @@ var rootCmd = &cobra.Command{
 		refResolver := refresolver.New(client)
 
 		if err := mgr.Add(&scheduledcheck.Runnable{
-			Client:            client,
-			RefResolver:       refResolver,
-			Namespaces:        namespaces,
-			OperatorNamespace: env.MariadbOperatorNamespace,
-			OperatorName:      os.Getenv("HOSTNAME"),
-			Interval:          scheduledCheckInterval,
-			Logger:            ctrl.Log.WithName("scheduledcheck"),
+			Client:             client,
+			RefResolver:        refResolver,
+			Namespaces:         namespaces,
+			OperatorNamespace:  env.MariadbOperatorNamespace,
+			OperatorName:       os.Getenv("HOSTNAME"),
+			Interval:           scheduledCheckInterval,
+			RootPasswordMaxAge: scheduledCheckRootPwMaxAge,
+			Logger:             ctrl.Log.WithName("scheduledcheck"),
 		}); err != nil {
 			setupLog.Error(err, "Unable to add scheduled check runnable")
 			os.Exit(1)
