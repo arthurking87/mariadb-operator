@@ -289,6 +289,8 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 	}
 	defer client.Close()
 
+	snapshotTimeout := ptr.Deref(backup.Spec.Timeout, mariadbv1alpha1.DefaultPhysicalBackupTimeout)
+
 	logger.V(1).Info("Locking tables with read lock")
 	if err := client.LockTablesWithReadLock(ctx); err != nil {
 		return ctrl.Result{}, fmt.Errorf("error locking tables with read lock: %v", err)
@@ -299,6 +301,19 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 			logger.Error(err, "error unlocking tables")
 		}
 	}()
+
+	// Flushing and waiting for the VolumeSnapshot to be provisioned each get their own
+	// context.WithTimeout below. Allotting snapshotTimeout.Duration to both independently would
+	// let the operation take up to 2x the configured timeout, so the flush gets half of the
+	// budget and the snapshot wait gets whatever remains of the full budget afterwards.
+	flushStart := time.Now()
+	if err := r.flushInnodbBufferPool(ctx, client, snapshotTimeout.Duration/2, logger); err != nil {
+		return ctrl.Result{}, fmt.Errorf("error flushing InnoDB buffer pool: %v", err)
+	}
+	remainingTimeout := snapshotTimeout.Duration - time.Since(flushStart)
+	if remainingTimeout < 0 {
+		remainingTimeout = 0
+	}
 
 	gtid, err := r.getGtidCurrentPos(ctx, mariadb, client)
 	if err != nil {
@@ -328,8 +343,7 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 		)
 	}
 
-	snapshotTimeout := ptr.Deref(backup.Spec.Timeout, mariadbv1alpha1.DefaultPhysicalBackupTimeout)
-	snapshotCtx, cancel := context.WithTimeout(ctx, snapshotTimeout.Duration)
+	snapshotCtx, cancel := context.WithTimeout(ctx, remainingTimeout)
 	defer cancel()
 
 	if err := wait.PollUntilSuccessOrContextCancel(snapshotCtx, logger, func(ctx context.Context) error {
@@ -359,6 +373,55 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 	}
 
 	return ctrl.Result{}, r.patchPhysicalBackup(ctx, backup, mariadb, gtid, logger)
+}
+
+// flushInnodbBufferPool forces InnoDB to flush its dirty pages to disk before a VolumeSnapshot is taken.
+// Without this, the snapshot captures the data directory as if MariaDB had crashed, forcing InnoDB crash
+// recovery to replay the outstanding redo log on restore, which can be significantly slower than a clean start
+// depending on how much unflushed data was pending at snapshot time.
+func (r *PhysicalBackupReconciler) flushInnodbBufferPool(ctx context.Context, client *sql.Client, timeout time.Duration,
+	logger logr.Logger) error {
+	originalPct, err := client.InnodbMaxDirtyPagesPct(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting innodb_max_dirty_pages_pct: %v", err)
+	}
+	originalLwm, err := client.InnodbMaxDirtyPagesPctLwm(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting innodb_max_dirty_pages_pct_lwm: %v", err)
+	}
+
+	if err := client.SetInnodbMaxDirtyPagesPctLwm(ctx, "0"); err != nil {
+		return fmt.Errorf("error setting innodb_max_dirty_pages_pct_lwm: %v", err)
+	}
+	if err := client.SetInnodbMaxDirtyPagesPct(ctx, "0"); err != nil {
+		return fmt.Errorf("error setting innodb_max_dirty_pages_pct: %v", err)
+	}
+	defer func() {
+		// MariaDB requires innodb_max_dirty_pages_pct_lwm <= innodb_max_dirty_pages_pct at all
+		// times. Both are currently 0, so pct must be restored first: restoring lwm first would
+		// try to set it above the still-zero pct and fail, leaving lwm stuck at 0.
+		if err := client.SetInnodbMaxDirtyPagesPct(ctx, originalPct); err != nil {
+			logger.Error(err, "error restoring innodb_max_dirty_pages_pct")
+		}
+		if err := client.SetInnodbMaxDirtyPagesPctLwm(ctx, originalLwm); err != nil {
+			logger.Error(err, "error restoring innodb_max_dirty_pages_pct_lwm")
+		}
+	}()
+
+	flushCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	logger.V(1).Info("Waiting for InnoDB dirty pages to be flushed")
+	return wait.PollUntilSuccessOrContextCancel(flushCtx, logger, func(ctx context.Context) error {
+		dirtyPages, err := client.InnodbBufferPoolPagesDirty(ctx)
+		if err != nil {
+			return fmt.Errorf("error getting Innodb_buffer_pool_pages_dirty: %v", err)
+		}
+		if dirtyPages > 0 {
+			return fmt.Errorf("%d InnoDB dirty pages pending flush", dirtyPages)
+		}
+		return nil
+	})
 }
 
 func (r *PhysicalBackupReconciler) getGtidCurrentPos(ctx context.Context, mariadb *mariadbv1alpha1.MariaDB,

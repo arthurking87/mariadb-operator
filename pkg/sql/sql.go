@@ -726,6 +726,22 @@ func (c *Client) UnlockTables(ctx context.Context) error {
 	return c.Exec(ctx, "UNLOCK TABLES;")
 }
 
+func (c *Client) InnodbMaxDirtyPagesPct(ctx context.Context) (string, error) {
+	return c.SystemVariable(ctx, "innodb_max_dirty_pages_pct")
+}
+
+func (c *Client) SetInnodbMaxDirtyPagesPct(ctx context.Context, value string) error {
+	return c.SetSystemVariable(ctx, "innodb_max_dirty_pages_pct", value)
+}
+
+func (c *Client) InnodbMaxDirtyPagesPctLwm(ctx context.Context) (string, error) {
+	return c.SystemVariable(ctx, "innodb_max_dirty_pages_pct_lwm")
+}
+
+func (c *Client) SetInnodbMaxDirtyPagesPctLwm(ctx context.Context, value string) error {
+	return c.SetSystemVariable(ctx, "innodb_max_dirty_pages_pct_lwm", value)
+}
+
 func (c *Client) GetReadOnly(ctx context.Context) (bool, error) {
 	return c.IsSystemVariableEnabled(ctx, "read_only")
 }
@@ -1219,6 +1235,10 @@ func (c *Client) StatusVariableInt(ctx context.Context, variable string) (int, e
 		return 0, err
 	}
 	return val, nil
+}
+
+func (c *Client) InnodbBufferPoolPagesDirty(ctx context.Context) (int, error) {
+	return c.StatusVariableInt(ctx, "Innodb_buffer_pool_pages_dirty")
 }
 
 func (c *Client) GaleraClusterSize(ctx context.Context) (int, error) {
