@@ -62,10 +62,11 @@ func TestPodController_NoCandidateRequeuesAtFixedInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Requeue {
-		t.Error("expected result.Requeue to be false (must not fall into the generic default-backoff path)")
-	}
-	if result.RequeueAfter != noFailoverCandidateRequeueInterval {
-		t.Errorf("expected RequeueAfter = %v, got %v", noFailoverCandidateRequeueInterval, result.RequeueAfter)
+	// Compare the whole struct rather than reading result.Requeue directly (deprecated in favor
+	// of RequeueAfter): this still asserts the generic default-backoff path (Requeue: true,
+	// RequeueAfter: 0) was NOT taken, without triggering that deprecation.
+	want := ctrl.Result{RequeueAfter: noFailoverCandidateRequeueInterval}
+	if result != want {
+		t.Errorf("expected result = %+v, got %+v", want, result)
 	}
 }
