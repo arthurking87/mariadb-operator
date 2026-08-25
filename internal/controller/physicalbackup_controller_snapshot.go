@@ -302,8 +302,17 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 		}
 	}()
 
-	if err := r.flushInnodbBufferPool(ctx, client, snapshotTimeout.Duration, logger); err != nil {
+	// Flushing and waiting for the VolumeSnapshot to be provisioned each get their own
+	// context.WithTimeout below. Allotting snapshotTimeout.Duration to both independently would
+	// let the operation take up to 2x the configured timeout, so the flush gets half of the
+	// budget and the snapshot wait gets whatever remains of the full budget afterwards.
+	flushStart := time.Now()
+	if err := r.flushInnodbBufferPool(ctx, client, snapshotTimeout.Duration/2, logger); err != nil {
 		return ctrl.Result{}, fmt.Errorf("error flushing InnoDB buffer pool: %v", err)
+	}
+	remainingTimeout := snapshotTimeout.Duration - time.Since(flushStart)
+	if remainingTimeout < 0 {
+		remainingTimeout = 0
 	}
 
 	gtid, err := r.getGtidCurrentPos(ctx, mariadb, client)
@@ -334,7 +343,7 @@ func (r *PhysicalBackupReconciler) createVolumeSnapshot(ctx context.Context, sna
 		)
 	}
 
-	snapshotCtx, cancel := context.WithTimeout(ctx, snapshotTimeout.Duration)
+	snapshotCtx, cancel := context.WithTimeout(ctx, remainingTimeout)
 	defer cancel()
 
 	if err := wait.PollUntilSuccessOrContextCancel(snapshotCtx, logger, func(ctx context.Context) error {
@@ -388,11 +397,14 @@ func (r *PhysicalBackupReconciler) flushInnodbBufferPool(ctx context.Context, cl
 		return fmt.Errorf("error setting innodb_max_dirty_pages_pct: %v", err)
 	}
 	defer func() {
-		if err := client.SetInnodbMaxDirtyPagesPctLwm(ctx, originalLwm); err != nil {
-			logger.Error(err, "error restoring innodb_max_dirty_pages_pct_lwm")
-		}
+		// MariaDB requires innodb_max_dirty_pages_pct_lwm <= innodb_max_dirty_pages_pct at all
+		// times. Both are currently 0, so pct must be restored first: restoring lwm first would
+		// try to set it above the still-zero pct and fail, leaving lwm stuck at 0.
 		if err := client.SetInnodbMaxDirtyPagesPct(ctx, originalPct); err != nil {
 			logger.Error(err, "error restoring innodb_max_dirty_pages_pct")
+		}
+		if err := client.SetInnodbMaxDirtyPagesPctLwm(ctx, originalLwm); err != nil {
+			logger.Error(err, "error restoring innodb_max_dirty_pages_pct_lwm")
 		}
 	}()
 
