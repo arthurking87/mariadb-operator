@@ -76,6 +76,18 @@ This role-aware update strategy consists in rolling out the replica `Pods` one b
 - Read operations impact is minimized by only rolling one replica `Pod` at a time.
 - Waiting for every `Pod` to be synced minimizes the impact in the clustering protocols and the network.
 
+### Bypassing a permanently stuck replica
+
+`ReplicasFirstPrimaryLast` waits for each replica `Pod` to become ready before moving on to the next one. If a replica `Pod` can never become ready again on its own (for example, its `PersistentVolumeClaim` is corrupted), this wait never succeeds and the rollout stalls on that `Pod` indefinitely, blocking the update for every other replica and the primary.
+
+To unblock the rollout in this situation, annotate the stuck `Pod` with `k8s.mariadb.com/skip-update`:
+
+```bash
+kubectl annotate pod mariadb-1 k8s.mariadb.com/skip-update=""
+```
+
+The operator excludes an annotated `Pod` from the update, letting the remaining replicas and the primary roll forward. This is intended as an emergency escape hatch for a `Pod` that's not going to recover, not a general way to opt a `Pod` out of updates: once the underlying issue is fixed and the `Pod` is deleted/recreated (e.g. by the `StatefulSet` controller, or manually), the annotation is gone along with it, and the new `Pod` will be updated normally like any other.
+
 ## `RollingUpdate`
 
 This strategy leverages the rolling update strategy from the [`StatefulSet` resource](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#rolling-updates), which, unlike [`ReplicasFirstPrimaryLast`](#replicasfirstprimarylast), does not take into account the role of the `Pods`(primary or replica). Instead, it rolls out the `Pods` one by one, from the highest to the lowest `StatefulSet` index.

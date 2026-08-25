@@ -65,7 +65,7 @@ func (r *MariaDBReconciler) reconcileUpdates(ctx context.Context, mdb *mariadbv1
 	}
 	logger.V(1).Info("Detected stale Pods that need updating", "pods", stalePodNames)
 
-	if result, err := r.waitForReadyStatus(ctx, mdb, logger); !result.IsZero() || err != nil {
+	if result, err := r.waitForReadyStatus(ctx, mdb, podsByRole, logger); !result.IsZero() || err != nil {
 		return result, err
 	}
 
@@ -75,7 +75,7 @@ func (r *MariaDBReconciler) reconcileUpdates(ctx context.Context, mdb *mariadbv1
 			continue
 		}
 		if _, ok := replicaPod.Annotations[metadata.SkipUpdateAnnotation]; ok {
-			logger.Info("Skipping stale replica Pod due to bypass annotation", "pod", replicaPod.Name,
+			logger.V(1).Info("Skipping stale replica Pod due to bypass annotation", "pod", replicaPod.Name,
 				"annotation", metadata.SkipUpdateAnnotation)
 			continue
 		}
@@ -83,7 +83,7 @@ func (r *MariaDBReconciler) reconcileUpdates(ctx context.Context, mdb *mariadbv1
 		if err := r.updatePod(ctx, mariadbKey, &replicaPod, stsUpdateRevision, logger); err != nil {
 			return ctrl.Result{}, fmt.Errorf("error updating replica Pod '%s': %v", replicaPod.Name, err)
 		}
-		if result, err := r.waitForReadyStatus(ctx, mdb, logger); !result.IsZero() || err != nil {
+		if result, err := r.waitForReadyStatus(ctx, mdb, podsByRole, logger); !result.IsZero() || err != nil {
 			return result, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -189,13 +189,22 @@ func (r *MariaDBReconciler) getExporterUpdateAnnotations(ctx context.Context, md
 	return podAnnotations, nil
 }
 
-func (r *MariaDBReconciler) waitForReadyStatus(ctx context.Context, mdb *mariadbv1alpha1.MariaDB, logger logr.Logger) (ctrl.Result, error) {
+// waitForReadyStatus blocks the update rollout until enough Pods are ready, excluding any Pod
+// annotated with metadata.SkipUpdateAnnotation from that requirement: without this exclusion, a
+// single permanently broken Pod (e.g. a corrupted PVC) that the annotation is meant to bypass
+// would keep ReadyReplicas below mdb.Spec.Replicas forever, so this check — which the annotated
+// Pod is never even considered by, since it's checked further down in reconcileUpdates — would
+// requeue indefinitely before that point is ever reached.
+func (r *MariaDBReconciler) waitForReadyStatus(ctx context.Context, mdb *mariadbv1alpha1.MariaDB, podsByRole podRoleSet,
+	logger logr.Logger) (ctrl.Result, error) {
 	var sts appsv1.StatefulSet
 	if err := r.Get(ctx, client.ObjectKeyFromObject(mdb), &sts); err != nil {
 		return ctrl.Result{}, err
 	}
-	if sts.Status.ReadyReplicas != mdb.Spec.Replicas {
-		logger.V(1).Info("Waiting for all Pods to be ready to proceed with the update. Requeuing...")
+	requiredReady := mdb.Spec.Replicas - podsByRole.skipUpdateCount()
+	if sts.Status.ReadyReplicas < requiredReady {
+		logger.V(1).Info("Waiting for all non-skipped Pods to be ready to proceed with the update. Requeuing...",
+			"readyReplicas", sts.Status.ReadyReplicas, "requiredReady", requiredReady)
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
@@ -272,6 +281,20 @@ func (p *podRoleSet) getStalePodNames(updateRevision string) []string {
 		podNames = append(podNames, p.primary.Name)
 	}
 	return podNames
+}
+
+// skipUpdateCount returns how many Pods in the set are annotated with metadata.SkipUpdateAnnotation.
+func (p *podRoleSet) skipUpdateCount() int32 {
+	var n int32
+	for _, r := range p.replicas {
+		if _, ok := r.Annotations[metadata.SkipUpdateAnnotation]; ok {
+			n++
+		}
+	}
+	if _, ok := p.primary.Annotations[metadata.SkipUpdateAnnotation]; ok {
+		n++
+	}
+	return n
 }
 
 func (r *MariaDBReconciler) getPodsByRole(ctx context.Context, mdb *mariadbv1alpha1.MariaDB, podsByRole *podRoleSet,
