@@ -32,8 +32,8 @@ func (r *MariaDBReconciler) reconcileStatus(ctx context.Context, mdb *mariadbv1a
 	logger := log.FromContext(ctx).WithName("status").V(1)
 
 	var sts appsv1.StatefulSet
-	if err := r.Get(ctx, client.ObjectKeyFromObject(mdb), &sts); err != nil {
-		logger.Info("error getting StatefulSet", "err", err)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(mdb), &sts); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("error getting StatefulSet: %v", err)
 	}
 
 	replRoles, replErr := r.getReplicationRoles(ctx, mdb)
@@ -90,8 +90,8 @@ func (r *MariaDBReconciler) reconcileStatus(ctx context.Context, mdb *mariadbv1a
 			return nil
 		}
 
-		if err := r.setUpdatedCondition(ctx, mdb); err != nil {
-			log.FromContext(ctx).V(1).Info("error setting MariaDB updated condition", "err", err)
+		if err := r.setUpdatedConditionOrIgnoreNotFound(ctx, mdb); err != nil {
+			return err
 		}
 		condition.SetReadyWithMariaDB(&mdb.Status, &sts, mdb)
 		return nil
@@ -285,6 +285,20 @@ func (r *MariaDBReconciler) getMaxScalePrimaryPod(ctx context.Context, mdb *mari
 		return nil, fmt.Errorf("error getting Pod for MaxScale server '%s': %v", *primarySrv, err)
 	}
 	return podIndex, nil
+}
+
+// setUpdatedConditionOrIgnoreNotFound sets the Updated/Updating/PendingUpdate condition, tolerating
+// a NotFound StatefulSet (not created yet) as a no-op. Any other error is propagated so the caller
+// aborts the status patch instead of persisting a condition computed from incomplete state.
+func (r *MariaDBReconciler) setUpdatedConditionOrIgnoreNotFound(ctx context.Context, mdb *mariadbv1alpha1.MariaDB) error {
+	if err := r.setUpdatedCondition(ctx, mdb); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.FromContext(ctx).V(1).Info("error setting MariaDB updated condition", "err", err)
+			return nil
+		}
+		return fmt.Errorf("error setting MariaDB updated condition: %v", err)
+	}
+	return nil
 }
 
 func (r *MariaDBReconciler) setUpdatedCondition(ctx context.Context, mdb *mariadbv1alpha1.MariaDB) error {

@@ -1388,7 +1388,7 @@ _Appears in:_
 | `priorityClassName` _string_ | PriorityClassName to be used in the Pod. |  |  |
 | `topologySpreadConstraints` _[TopologySpreadConstraint](#topologyspreadconstraint) array_ | TopologySpreadConstraints to be used in the Pod. |  |  |
 | `enableServiceLinks` _boolean_ | EnableServiceLinks to be used in the Pod. |  |  |
-| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. |  |  |
+| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is<br />consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM. | 30 |  |
 
 
 #### MariaDBRef
@@ -1455,7 +1455,7 @@ _Appears in:_
 | `priorityClassName` _string_ | PriorityClassName to be used in the Pod. |  |  |
 | `topologySpreadConstraints` _[TopologySpreadConstraint](#topologyspreadconstraint) array_ | TopologySpreadConstraints to be used in the Pod. |  |  |
 | `enableServiceLinks` _boolean_ | EnableServiceLinks to be used in the Pod. |  |  |
-| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. |  |  |
+| `terminationGracePeriodSeconds` _integer_ | TerminationGracePeriodSeconds to be used in the Pod. Note that a fraction of this budget is<br />consumed by the default preStop hook (see Lifecycle) before mysqld receives SIGTERM. | 30 |  |
 | `suspend` _boolean_ | Suspend indicates whether the current resource should be suspended or not.<br />This can be useful for maintenance, as disabling the reconciliation prevents the operator from interfering with user operations during maintenance activities. | false |  |
 | `image` _string_ | Image name to be used by the MariaDB instances. The supported format is `<image>:<tag>`.<br />Only MariaDB official images are supported. |  |  |
 | `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#pullpolicy-v1-core)_ | ImagePullPolicy is the image pull policy. One of `Always`, `Never` or `IfNotPresent`. If not defined, it defaults to `IfNotPresent`. |  | Enum: [Always Never IfNotPresent] <br /> |

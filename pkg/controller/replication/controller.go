@@ -15,6 +15,7 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/secret"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/controller/service"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/environment"
+	"github.com/mariadb-operator/mariadb-operator/v26/pkg/hash"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/metadata"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/refresolver"
 	"github.com/mariadb-operator/mariadb-operator/v26/pkg/sql"
@@ -241,8 +242,18 @@ func (r *ReplicationReconciler) ReconcileReplicationInPod(ctx context.Context, r
 	pod := statefulset.PodName(req.mariadb.ObjectMeta, podIndex)
 	topology := r.topologyManager.TopologyForMariaDB(req.mariadb, logger.WithValues("pod", pod))
 
+	configHash, err := replicationConfigHash(req.mariadb)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("error computing replication config hash: %v", err)
+	}
+	// configChanged is true when the replication-relevant spec fields changed since the last time
+	// they were successfully applied to this Pod. This ensures spec changes (e.g. connectionRetrySeconds,
+	// gtid mode) are re-applied even when the Pod's replication role has not changed, instead of only
+	// being picked up on the next switchover/failover.
+	configChanged := replStatus.ConfigHashes[pod] != configHash
+
 	if primaryPodIndex == podIndex {
-		if shouldSkipPrimaryReconciliation(req.mariadb, replRoles, pod, logger) {
+		if shouldSkipPrimaryReconciliation(req.mariadb, replRoles, pod, logger) && !configChanged {
 			return ctrl.Result{}, nil
 		}
 		client, err := req.replClientSet.currentPrimaryClient(ctx)
@@ -254,10 +265,13 @@ func (r *ReplicationReconciler) ReconcileReplicationInPod(ctx context.Context, r
 		if err := topology.ConfigurePrimary(ctx, client); err != nil {
 			return ctrl.Result{}, fmt.Errorf("error configuring primary: %v", err)
 		}
+		if err := r.patchReplicationConfigHash(ctx, req.mariadb, pod, configHash); err != nil {
+			return ctrl.Result{}, fmt.Errorf("error patching replication config hash: %v", err)
+		}
 		return ctrl.Result{}, nil
 	}
 
-	if !opts.forceReplicaConfiguration {
+	if !opts.forceReplicaConfiguration && !configChanged {
 		role, ok := replRoles[pod]
 		if ok && role == mariadbv1alpha1.ReplicationRoleReplica {
 			return ctrl.Result{}, nil
@@ -277,7 +291,49 @@ func (r *ReplicationReconciler) ReconcileReplicationInPod(ctx context.Context, r
 	if err := topology.ConfigureReplica(ctx, client, primaryPodIndex, replicaOpts...); err != nil {
 		return ctrl.Result{}, fmt.Errorf("error configuring replica: %v", err)
 	}
+	if err := r.patchReplicationConfigHash(ctx, req.mariadb, pod, configHash); err != nil {
+		return ctrl.Result{}, fmt.Errorf("error patching replication config hash: %v", err)
+	}
 	return ctrl.Result{}, nil
+}
+
+// replicationConfigFields captures the subset of the MariaDB spec that is applied via
+// ConfigurePrimary/ConfigureReplica (CHANGE MASTER TO and related SQL statements). It is hashed
+// and stored per-Pod so spec changes can be detected and re-applied independently of role changes.
+type replicationConfigFields struct {
+	Port                     int32
+	TLSEnabled               bool
+	Gtid                     mariadbv1alpha1.Gtid
+	ConnectionRetrySeconds   *int
+	ReplPasswordSecretKeyRef *mariadbv1alpha1.GeneratedSecretKeyRef
+}
+
+func replicationConfigHash(mariadb *mariadbv1alpha1.MariaDB) (string, error) {
+	replication := ptr.Deref(mariadb.Spec.Replication, mariadbv1alpha1.Replication{})
+	fields := replicationConfigFields{
+		Port:                     mariadb.Spec.Port,
+		TLSEnabled:               mariadb.IsTLSEnabled(),
+		Gtid:                     ptr.Deref(replication.Replica.Gtid, mariadbv1alpha1.GtidCurrentPos),
+		ConnectionRetrySeconds:   replication.Replica.ConnectionRetrySeconds,
+		ReplPasswordSecretKeyRef: replication.Replica.ReplPasswordSecretKeyRef,
+	}
+	return hash.HashJSON(fields)
+}
+
+func (r *ReplicationReconciler) patchReplicationConfigHash(ctx context.Context, mariadb *mariadbv1alpha1.MariaDB,
+	pod, configHash string) error {
+	if existing := ptr.Deref(mariadb.Status.Replication, mariadbv1alpha1.ReplicationStatus{}).ConfigHashes[pod]; existing == configHash {
+		return nil
+	}
+	return r.patchStatus(ctx, mariadb, func(status *mariadbv1alpha1.MariaDBStatus) {
+		if status.Replication == nil {
+			status.Replication = &mariadbv1alpha1.ReplicationStatus{}
+		}
+		if status.Replication.ConfigHashes == nil {
+			status.Replication.ConfigHashes = make(map[string]string)
+		}
+		status.Replication.ConfigHashes[pod] = configHash
+	})
 }
 
 func (r *ReplicationReconciler) getReplicaOpts(ctx context.Context, req *ReconcileRequest, pod string, index int,
