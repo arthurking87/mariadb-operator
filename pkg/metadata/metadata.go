@@ -27,5 +27,11 @@ var (
 
 	WebhookConfigAnnotation = "k8s.mariadb.com/webhook"
 
+	// SkipUpdateAnnotation, set on a Pod, excludes it from the
+	// ReplicasFirstPrimaryLast rolling update sequence. Use it to unblock the
+	// rollout when a Pod is stuck and will never reach the new revision on its
+	// own (e.g. a broken PVC), so the other Pods can still be updated.
+	SkipUpdateAnnotation = "k8s.mariadb.com/skip-update"
+
 	MetaCtrlFieldPath = ".metadata.controller"
 )
