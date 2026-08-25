@@ -2,6 +2,7 @@ package wait
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -30,10 +31,10 @@ func PollUntilSuccessOrContextCancel(ctx context.Context, logger logr.Logger, fn
 func PollWithMariaDB(ctx context.Context, mariadbKey types.NamespacedName, client ctrlclient.Client, logger logr.Logger,
 	fn func(ctx context.Context) error) error {
 	return PollUntilSuccessOrContextCancel(ctx, logger, func(ctx context.Context) error {
-		if shouldPoll(ctx, mariadbKey, client, logger) {
-			return fn(ctx)
+		if !shouldPoll(ctx, mariadbKey, client, logger) {
+			return fmt.Errorf("MariaDB %s not available for polling", mariadbKey)
 		}
-		return nil
+		return fn(ctx)
 	})
 }
 

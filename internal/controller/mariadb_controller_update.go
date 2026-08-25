@@ -78,6 +78,9 @@ func (r *MariaDBReconciler) reconcileUpdates(ctx context.Context, mdb *mariadbv1
 		if err := r.updatePod(ctx, mariadbKey, &replicaPod, stsUpdateRevision, logger); err != nil {
 			return ctrl.Result{}, fmt.Errorf("error updating replica Pod '%s': %v", replicaPod.Name, err)
 		}
+		if result, err := r.waitForReadyStatus(ctx, mdb, logger); !result.IsZero() || err != nil {
+			return result, err
+		}
 		return ctrl.Result{Requeue: true}, nil
 	}
 
