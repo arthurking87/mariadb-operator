@@ -65,7 +65,8 @@ var (
 	metricsAddr string
 	healthAddr  string
 
-	leaderElect bool
+	leaderElect      bool
+	leaderElectionID string
 
 	logLevel           string
 	logLevelName       = "log-level"
@@ -123,6 +124,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&healthAddr, "health-addr", ":8081", "The address the probe endpoint binds to.")
 
 	rootCmd.PersistentFlags().BoolVar(&leaderElect, "leader-elect", false, "Enable leader election for controller manager.")
+	rootCmd.Flags().StringVar(&leaderElectionID, "leader-election-id", "mariadb-operator.mariadb.com",
+		"Leader election ID used to acquire the leader lock. Customize this when running multiple independent "+
+			"operator instances in the same namespace, otherwise they will contend for the same lease.")
 
 	rootCmd.PersistentFlags().StringVar(&logLevel, logLevelName, "info", "Log level to use, one of: "+
 		"debug, info, warn, error, dpanic, panic, fatal.")
@@ -226,7 +230,7 @@ var rootCmd = &cobra.Command{
 			},
 			HealthProbeBindAddress: healthAddr,
 			LeaderElection:         leaderElect,
-			LeaderElectionID:       "mariadb-operator.mariadb.com",
+			LeaderElectionID:       leaderElectionID,
 			Controller: config.Controller{
 				MaxConcurrentReconciles: maxConcurrentReconciles,
 				CacheSyncTimeout:        cacheSyncTimeout,
@@ -367,6 +371,7 @@ var rootCmd = &cobra.Command{
 			controller.NewPodReplicationController(
 				client,
 				replRecorder,
+				endpointsReconciler,
 			),
 			[]string{
 				metadata.MariadbAnnotation,
