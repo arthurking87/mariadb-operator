@@ -127,8 +127,21 @@ func WithTimeout(d time.Duration) Opt {
 	}
 }
 
+// dbHandle is satisfied by both *sql.DB and *sql.Conn, letting Client run either against the
+// pool or pinned to a single connection (see WithoutBinlog).
+type dbHandle interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	Close() error
+}
+
 type Client struct {
-	db *sql.DB
+	db dbHandle
+	// pool is the underlying connection pool, only set on Clients constructed via NewClient*.
+	// It's needed to pin a single connection in WithoutBinlog, since a *Client wrapping a
+	// *sql.Conn (dbHandle doesn't expose a way to open further connections from it) can't do so.
+	pool *sql.DB
 }
 
 func NewClient(clientOpts ...Opt) (*Client, error) {
@@ -145,7 +158,8 @@ func NewClient(clientOpts ...Opt) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		db: db,
+		db:   db,
+		pool: db,
 	}, nil
 }
 
@@ -367,6 +381,28 @@ func ConnectWithOpts(opts Opts) (*sql.DB, error) {
 
 func (c *Client) Close() error {
 	return c.db.Close()
+}
+
+// WithoutBinlog runs fn against a Client pinned to a single connection with sql_log_bin
+// disabled for that connection's lifetime, so statements fn executes aren't written to the
+// binlog: they won't replicate to other members, and won't be blocked by a semi-sync ACK wait.
+// Use this for operator bookkeeping that every member must apply independently anyway (e.g.
+// managing the replication user), where waiting for replicas to receive it over replication
+// serves no purpose and can stall behind a slow/absent semi-sync ACK.
+func (c *Client) WithoutBinlog(ctx context.Context, fn func(*Client) error) error {
+	if c.pool == nil {
+		return errors.New("error: WithoutBinlog requires a Client backed by a connection pool")
+	}
+	conn, err := c.pool.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("error acquiring connection: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "SET SESSION sql_log_bin=0;"); err != nil {
+		return fmt.Errorf("error disabling session binlog: %v", err)
+	}
+	return fn(&Client{db: conn})
 }
 
 func (c *Client) Exec(ctx context.Context, sql string, args ...any) error {

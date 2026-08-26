@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -59,6 +60,19 @@ type ReplicationReconciler struct {
 	secretReconciler    *secret.SecretReconciler
 	configMapreconciler *configmap.ConfigMapReconciler
 	serviceReconciler   *service.ServiceReconciler
+	// primaryRetryAttempts tracks, per "namespace/pod", the last time ConfigurePrimary was
+	// retried while waiting to observe the primary role (see primaryRetryInterval). It is an
+	// in-memory best-effort throttle: losing it on operator restart just means the next retry
+	// isn't throttled, which is harmless.
+	primaryRetryAttempts sync.Map
+}
+
+// primaryRetryInterval bounds how often ConfigurePrimary is retried for a primary Pod whose
+// role hasn't been observed yet (see the comment at its call site in ReconcileReplicationInPod).
+const primaryRetryInterval = 5 * time.Second
+
+func primaryRetryKey(mariadb *mariadbv1alpha1.MariaDB, pod string) string {
+	return mariadb.Namespace + "/" + pod
 }
 
 func NewReplicationReconciler(client client.Client, recorder events.EventRecorder, builder *builder.Builder, env *environment.OperatorEnv,
@@ -248,8 +262,25 @@ func (r *ReplicationReconciler) ReconcileReplicationInPod(ctx context.Context, r
 	configChanged := replStatus.ConfigHashes[pod] != configHash
 
 	if primaryPodIndex == podIndex {
+		retryKey := primaryRetryKey(req.mariadb, pod)
 		if shouldSkipPrimaryReconciliation(req.mariadb, replRoles, pod, logger) && !configChanged {
+			r.primaryRetryAttempts.Delete(retryKey)
 			return ctrl.Result{}, nil
+		}
+		// Once ConfigurePrimary has already been applied for the current spec (configChanged
+		// false), retrying it while the primary role hasn't been observed yet is a no-op from
+		// the DB's perspective: the role only flips to Primary once a replica Pod finishes its
+		// own CHANGE MASTER/START SLAVE, which re-running ConfigurePrimary cannot influence.
+		// Throttle those no-op retries so a fast reconcile cadence (e.g. driven by status
+		// updates while MariaDB is not Ready) doesn't burn SQL round trips and API server writes
+		// right when replication is trying to establish, which is exactly when that headroom is
+		// needed most.
+		if !configChanged {
+			if lastAttempt, ok := r.primaryRetryAttempts.Load(retryKey); ok {
+				if wait := primaryRetryInterval - time.Since(lastAttempt.(time.Time)); wait > 0 {
+					return ctrl.Result{RequeueAfter: wait}, nil
+				}
+			}
 		}
 		client, err := req.replClientSet.currentPrimaryClient(ctx)
 		if err != nil {
@@ -257,6 +288,9 @@ func (r *ReplicationReconciler) ReconcileReplicationInPod(ctx context.Context, r
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
+		if !configChanged {
+			r.primaryRetryAttempts.Store(retryKey, time.Now())
+		}
 		if err := topology.ConfigurePrimary(ctx, client); err != nil {
 			return ctrl.Result{}, fmt.Errorf("error configuring primary: %v", err)
 		}

@@ -8,5 +8,5 @@ import "database/sql"
 // Client.db itself stays unexported; this is the only supported way to inject a test double
 // from outside this package.
 func NewClientFromDB(db *sql.DB) *Client {
-	return &Client{db: db}
+	return &Client{db: db, pool: db}
 }

@@ -352,12 +352,16 @@ var _ = Describe("MariaDB replication restore from backup", Ordered, func() {
 			Expect(k8sClient.Create(testCtx, bootstrapFrom)).To(Succeed())
 
 			By("Expecting MariaDB to be ready eventually")
+			// Restoring from backup re-establishes replication from scratch: ConfigurePrimary keeps
+			// retrying the repl user's CREATE/ALTER USER statement until the primary role is
+			// observed, and each of those retries can block for a semi-sync ACK timeout while the
+			// replica Pods are still coming up, so this needs more headroom than testHighTimeout.
 			Eventually(func() bool {
 				if err := k8sClient.Get(testCtx, key, mdb); err != nil {
 					return false
 				}
 				return mdb.IsReady() && mdb.IsInitialized() && mdb.HasRestoredBackup()
-			}, testHighTimeout, testInterval).Should(BeTrue())
+			}, testVeryHighTimeout, testInterval).Should(BeTrue())
 		},
 		Entry(
 			"from physical backup",

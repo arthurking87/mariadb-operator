@@ -56,25 +56,32 @@ func (r *userSqlReconciler) reconcileReplUserSql(ctx context.Context, client *sq
 	if err != nil {
 		return fmt.Errorf("error checking if replication user exists: %v", err)
 	}
-	if exists {
-		if err := client.AlterUser(ctx, accountName, sql.WithIdentifiedBy(replPassword)); err != nil {
-			return fmt.Errorf("error altering replication user: %v", err)
+
+	// Every member reconciles its own repl user independently as soon as it becomes primary, so
+	// there's no need to replicate this bookkeeping to other members. Skipping the binlog for it
+	// avoids waiting on a semi-sync ACK here, which would otherwise stall this exact statement
+	// right when replication may still be establishing between members.
+	return client.WithoutBinlog(ctx, func(client *sql.Client) error {
+		if exists {
+			if err := client.AlterUser(ctx, accountName, sql.WithIdentifiedBy(replPassword)); err != nil {
+				return fmt.Errorf("error altering replication user: %v", err)
+			}
+		} else {
+			if err := client.CreateUser(ctx, accountName, sql.WithIdentifiedBy(replPassword)); err != nil {
+				return fmt.Errorf("error creating replication user: %v", err)
+			}
 		}
-	} else {
-		if err := client.CreateUser(ctx, accountName, sql.WithIdentifiedBy(replPassword)); err != nil {
-			return fmt.Errorf("error creating replication user: %v", err)
+		if err := client.Grant(
+			ctx,
+			opts.privileges,
+			"*",
+			"*",
+			accountName,
+		); err != nil {
+			return fmt.Errorf("error creating grant: %v", err)
 		}
-	}
-	if err := client.Grant(
-		ctx,
-		opts.privileges,
-		"*",
-		"*",
-		accountName,
-	); err != nil {
-		return fmt.Errorf("error creating grant: %v", err)
-	}
-	return nil
+		return nil
+	})
 }
 
 func (r *userSqlReconciler) newReplUserOpts() (*userSqlOpts, error) {
