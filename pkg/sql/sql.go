@@ -30,6 +30,47 @@ var (
 	ErrWaitReplicaTimeout = errors.New("timeout waiting for replica to be synced")
 )
 
+// defaultQueryTimeout bounds how long a single SQL operation may run when the
+// caller didn't already attach a deadline to its context. Without this,
+// Exec/Query/QueryRow can hang indefinitely against a half-open TCP
+// connection (e.g. a Pod that went away without closing the socket).
+// go-sql-driver/mysql honors context cancellation by tearing down the
+// underlying connection, so this alone is what actually recovers a hung
+// call — there's no separate liveness check involved (see Ping).
+const defaultQueryTimeout = 10 * time.Second
+
+// lockDefaultTimeout is the default used for LockTablesWithReadLock instead of
+// defaultQueryTimeout: acquiring FLUSH TABLES WITH READ LOCK can legitimately take a while on a
+// busy primary, since it has to wait for in-flight statements to finish first. Capping that at the
+// generic 10s default would turn an ordinary "busy but succeeds shortly after" wait into a hard
+// failure. Callers with a tighter budget can still override this by attaching their own deadline.
+const lockDefaultTimeout = 60 * time.Second
+
+// gtidWaitGracePeriod is added on top of the caller-supplied timeout when
+// waiting for MASTER_GTID_WAIT, so the Go-level context deadline always
+// expires after MariaDB's own server-side wait. Without this margin, the two
+// timers race: the context can fire first and abort the connection with a
+// raw "context deadline exceeded"/EOF instead of letting the query return
+// its own clean timeout result (-1).
+const gtidWaitGracePeriod = 5 * time.Second
+
+// withTimeout returns ctx unchanged if it already carries a deadline,
+// otherwise it attaches defaultQueryTimeout. The returned cancel func must
+// always be called by the caller.
+func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return withTimeoutDefault(ctx, defaultQueryTimeout)
+}
+
+// withTimeoutDefault behaves like withTimeout, but lets the caller pick the default applied when
+// ctx has no deadline of its own, for operations (like LockTablesWithReadLock) that need a
+// different default than defaultQueryTimeout.
+func withTimeoutDefault(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 type Opts struct {
 	Username string
 	Password string
@@ -369,22 +410,52 @@ func (c *Client) Close() error {
 	return c.db.Close()
 }
 
+// Ping checks that the underlying connection pool can reach the database, for callers that want an
+// explicit liveness check (e.g. a readiness probe). It does NOT guarantee anything about a
+// subsequent Exec/Query/QueryRow call: c.db is a connection pool, so the connection Ping checks out
+// and the one a later call gets are not guaranteed to be the same connection — a dead connection can
+// still be handed to that later call regardless of what Ping just reported. Exec/Query/QueryRow
+// don't call this for that reason; they rely solely on their context deadline (see
+// defaultQueryTimeout), which go-sql-driver/mysql honors by tearing down a hung connection.
+func (c *Client) Ping(ctx context.Context) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	return c.db.PingContext(ctx)
+}
+
+// Exec fully resolves before returning (ExecContext blocks until done), so
+// it's safe to cancel the timeout context as soon as the call completes.
 func (c *Client) Exec(ctx context.Context, sql string, args ...any) error {
+	return c.execWithTimeout(ctx, defaultQueryTimeout, sql, args...)
+}
+
+func (c *Client) execWithTimeout(ctx context.Context, timeout time.Duration, sql string, args ...any) error {
+	ctx, cancel := withTimeoutDefault(ctx, timeout)
+	defer cancel()
 	_, err := c.db.ExecContext(ctx, sql, args...)
 	return err
 }
 
+// Query, like QueryRow below, deliberately does NOT cancel its derived timeout context before
+// returning: the returned *sql.Rows is consumed by the caller afterwards (Next/Scan), and canceling
+// early would abort the still-open cursor before it's read. The timeout context expires on its own
+// after defaultQueryTimeout if the caller didn't set a shorter deadline, which also bounds how long
+// the caller may take consuming the rows before the borrowed connection is reclaimed — that's
+// intentional, not just a tolerated side effect: a caller stuck slowly iterating rows would
+// otherwise hold a pooled connection indefinitely.
 func (c *Client) Query(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
-	rows, err := c.db.QueryContext(ctx, sql, args...)
-	return rows, err
+	qctx, _ := withTimeout(ctx)
+	return c.db.QueryContext(qctx, sql, args...)
 }
 
+// QueryRow: see the design note on Query above; the same reasoning applies here.
 func (c *Client) QueryRow(ctx context.Context, sql string, args ...any) *sql.Row {
-	return c.db.QueryRowContext(ctx, sql, args...)
+	qctx, _ := withTimeout(ctx)
+	return c.db.QueryRowContext(qctx, sql, args...)
 }
 
 func (c Client) Exists(ctx context.Context, sql string, args ...any) (bool, error) {
-	rows, err := c.db.QueryContext(ctx, sql, args...)
+	rows, err := c.Query(ctx, sql, args...)
 	if err != nil {
 		return false, err
 	}
@@ -394,7 +465,7 @@ func (c Client) Exists(ctx context.Context, sql string, args ...any) (bool, erro
 
 // QueryColumnMaps executes a query and returns all rows as []map[column]value.
 func (c Client) QueryColumnMaps(ctx context.Context, sql string) ([]map[string]string, error) {
-	rows, err := c.db.QueryContext(ctx, sql)
+	rows, err := c.Query(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +635,7 @@ func (c *Client) AlterUser(ctx context.Context, accountName string, createUserOp
 }
 
 func (c *Client) UserExists(ctx context.Context, username, host string) (bool, error) {
-	row := c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM mysql.user WHERE user=? AND host=?", username, host)
+	row := c.QueryRow(ctx, "SELECT COUNT(*) FROM mysql.user WHERE user=? AND host=?", username, host)
 	var count int
 	if err := row.Scan(&count); err != nil {
 		return false, err
@@ -670,7 +741,7 @@ type DatabaseOpts struct {
 
 func (c *Client) CreateDatabase(ctx context.Context, database string, opts DatabaseOpts) error {
 	sql := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '%s')", database)
-	row := c.db.QueryRowContext(ctx, sql)
+	row := c.QueryRow(ctx, sql)
 	var dbExists string
 	if err := row.Scan(&dbExists); err != nil {
 		return err
@@ -696,7 +767,7 @@ func (c *Client) DropDatabase(ctx context.Context, database string) error {
 
 func (c *Client) SystemVariable(ctx context.Context, variable string) (string, error) {
 	sql := fmt.Sprintf("SELECT @@global.%s;", variable)
-	row := c.db.QueryRowContext(ctx, sql)
+	row := c.QueryRow(ctx, sql)
 
 	var val string
 	if err := row.Scan(&val); err != nil {
@@ -719,7 +790,7 @@ func (c *Client) SetSystemVariable(ctx context.Context, variable string, value s
 }
 
 func (c *Client) LockTablesWithReadLock(ctx context.Context) error {
-	return c.Exec(ctx, "FLUSH TABLES WITH READ LOCK;")
+	return c.execWithTimeout(ctx, lockDefaultTimeout, "FLUSH TABLES WITH READ LOCK;")
 }
 
 func (c *Client) UnlockTables(ctx context.Context) error {
@@ -846,7 +917,14 @@ func (c *Client) MigrateLegacyReplicationChannel(ctx context.Context) error {
 
 func (c *Client) WaitForReplicaGtid(ctx context.Context, gtid string, timeout time.Duration) error {
 	sql := fmt.Sprintf("SELECT MASTER_GTID_WAIT('%s', %d);", gtid, int(timeout.Seconds()))
-	row := c.db.QueryRowContext(ctx, sql)
+	// MASTER_GTID_WAIT already bounds itself to timeout server-side. Attach a
+	// slightly longer deadline here so that bound — not withTimeout's
+	// unrelated defaultQueryTimeout — governs how long this call can take,
+	// and so the query has a chance to return its own clean -1 result before
+	// the context tears down the connection.
+	ctx, cancel := context.WithTimeout(ctx, timeout+gtidWaitGracePeriod)
+	defer cancel()
+	row := c.QueryRow(ctx, sql)
 
 	var result int
 	if err := row.Scan(&result); err != nil {
@@ -1204,7 +1282,7 @@ MASTER_USE_GTID={{ .Gtid }};
 const statusVariableSql = "SELECT variable_value FROM information_schema.global_status WHERE variable_name=?;"
 
 func (c *Client) StatusVariable(ctx context.Context, variable string) (string, error) {
-	row := c.db.QueryRowContext(ctx, statusVariableSql, variable)
+	row := c.QueryRow(ctx, statusVariableSql, variable)
 	var val string
 	if err := row.Scan(&val); err != nil {
 		return "", err
@@ -1213,7 +1291,7 @@ func (c *Client) StatusVariable(ctx context.Context, variable string) (string, e
 }
 
 func (c *Client) StatusVariableInt(ctx context.Context, variable string) (int, error) {
-	row := c.db.QueryRowContext(ctx, statusVariableSql, variable)
+	row := c.QueryRow(ctx, statusVariableSql, variable)
 	var val int
 	if err := row.Scan(&val); err != nil {
 		return 0, err
@@ -1234,7 +1312,7 @@ func (c *Client) GaleraLocalState(ctx context.Context) (string, error) {
 }
 
 func (c *Client) MaxScaleConfigSyncVersion(ctx context.Context) (int, error) {
-	row := c.db.QueryRowContext(ctx, "SELECT version FROM maxscale_config")
+	row := c.QueryRow(ctx, "SELECT version FROM maxscale_config")
 	var version int
 	if err := row.Scan(&version); err != nil {
 		return 0, err

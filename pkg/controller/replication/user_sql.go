@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/v26/api/v1alpha1"
@@ -17,6 +18,13 @@ var (
 	replUserHost       = "%"
 	replUserPrivileges = []string{"REPLICATION REPLICA"}
 )
+
+// replUserSqlTimeout overrides sql.Client's default per-statement timeout for the repl user's
+// CREATE/ALTER USER + GRANT statements. These are binlogged writes that can legitimately block on a
+// semi-sync ACK from a replica that isn't ready yet (e.g. right after a restore or during
+// switchover), well past the client's generic default - mirrors how LockTablesWithReadLock gets its
+// own longer default for the same reason.
+const replUserSqlTimeout = 60 * time.Second
 
 type userSqlReconciler struct {
 	mariadb     *mariadbv1alpha1.MariaDB
@@ -55,6 +63,12 @@ func (r *userSqlReconciler) reconcileReplUserSql(ctx context.Context, client *sq
 	exists, err := client.UserExists(ctx, opts.username, opts.host)
 	if err != nil {
 		return fmt.Errorf("error checking if replication user exists: %v", err)
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, replUserSqlTimeout)
+		defer cancel()
 	}
 	if exists {
 		if err := client.AlterUser(ctx, accountName, sql.WithIdentifiedBy(replPassword)); err != nil {
