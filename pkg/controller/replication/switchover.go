@@ -581,12 +581,17 @@ func (r *ReplicationReconciler) configureReplicaOpts(ctx context.Context, req *R
 	var replicaOpts []ConfigureReplicaOpt
 
 	if req.replicasSynced {
-		primaryBinlogPos, err := primaryClient.GtidBinlogPos(ctx)
+		// primaryClient here is the newly promoted primary, which may not have written anything
+		// to its own binlog yet (e.g. if log_slave_updates is disabled, the transactions it
+		// applied while still a replica never reached its binlog). gtid_current_pos is the union
+		// of gtid_binlog_pos and gtid_slave_pos, so it reflects the primary's full GTID state
+		// regardless of whether it has generated any local binlog events yet.
+		primaryGtidPos, err := primaryClient.GtidCurrentPos(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("error getting primary binlog position: %v", err)
+			return nil, fmt.Errorf("error getting primary current GTID position: %v", err)
 		}
-		logger.Info("Configuring replicas with primary GTID", "gtid", primaryBinlogPos)
-		replicaOpts = append(replicaOpts, WithGtidSlavePos(primaryBinlogPos))
+		logger.Info("Configuring replicas with primary GTID", "gtid", primaryGtidPos)
+		replicaOpts = append(replicaOpts, WithGtidSlavePos(primaryGtidPos))
 	} else {
 		replicaOpts = append(replicaOpts, WithResetGtidSlavePos())
 	}
