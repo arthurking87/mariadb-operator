@@ -158,7 +158,9 @@ func (r *singleClusterTopology) ConfigurePrimary(ctx context.Context, client *sq
 	if err := client.DisableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error disabling read_only: %v", err)
 	}
-	if err := r.userSqlReconciler.reconcileReplUserSql(ctx, client); err != nil {
+	// When isReplica, gtid_slave_pos was just reset above: this write must stay binlogged so it
+	// seeds a non-empty gtid_binlog_pos for the newly promoted primary (see reconcileReplUserSql).
+	if err := r.userSqlReconciler.reconcileReplUserSql(ctx, client, !isReplica); err != nil {
 		return fmt.Errorf("error reconciling replication user SQL: %v", err)
 	}
 	return nil
@@ -361,7 +363,7 @@ func (m *multiClusterTopology) configurePrimaryReplica(ctx context.Context, clie
 	if err := client.DisableReadOnly(ctx); err != nil {
 		return fmt.Errorf("error disabling read_only: %v", err)
 	}
-	if err := m.userSqlReconciler.reconcileReplUserSql(ctx, client); err != nil {
+	if err := m.userSqlReconciler.reconcileReplUserSql(ctx, client, true); err != nil {
 		return fmt.Errorf("error reconciling replication user SQL: %v", err)
 	}
 	if err := m.configurePrimaryReplicaConnection(ctx, client); err != nil {

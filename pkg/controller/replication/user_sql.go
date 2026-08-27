@@ -39,7 +39,13 @@ type userSqlOpts struct {
 	privileges           []string
 }
 
-func (r *userSqlReconciler) reconcileReplUserSql(ctx context.Context, client *sql.Client) error {
+// reconcileReplUserSql (re)creates the repl user and grants it the required privileges. skipBinlog
+// must only be true when the caller already knows the primary's gtid_binlog_pos/gtid_slave_pos are
+// established (i.e. this isn't the first write after a replica-to-primary promotion): a freshly
+// promoted primary has just had its gtid_slave_pos reset and relies on this being its first
+// binlogged write to seed a non-empty GTID position, which switchover/failover need immediately
+// afterwards to reconnect the remaining replicas.
+func (r *userSqlReconciler) reconcileReplUserSql(ctx context.Context, client *sql.Client, skipBinlog bool) error {
 	r.logger.V(1).Info("Reconciling repl user")
 	opts, err := r.newReplUserOpts()
 	if err != nil {
@@ -57,11 +63,7 @@ func (r *userSqlReconciler) reconcileReplUserSql(ctx context.Context, client *sq
 		return fmt.Errorf("error checking if replication user exists: %v", err)
 	}
 
-	// Every member reconciles its own repl user independently as soon as it becomes primary, so
-	// there's no need to replicate this bookkeeping to other members. Skipping the binlog for it
-	// avoids waiting on a semi-sync ACK here, which would otherwise stall this exact statement
-	// right when replication may still be establishing between members.
-	return client.WithoutBinlog(ctx, func(client *sql.Client) error {
+	reconcile := func(client *sql.Client) error {
 		if exists {
 			if err := client.AlterUser(ctx, accountName, sql.WithIdentifiedBy(replPassword)); err != nil {
 				return fmt.Errorf("error altering replication user: %v", err)
@@ -81,7 +83,16 @@ func (r *userSqlReconciler) reconcileReplUserSql(ctx context.Context, client *sq
 			return fmt.Errorf("error creating grant: %v", err)
 		}
 		return nil
-	})
+	}
+
+	if !skipBinlog {
+		return reconcile(client)
+	}
+	// Every member reconciles its own repl user independently as soon as it becomes primary, so
+	// there's no need to replicate this bookkeeping to other members. Skipping the binlog for it
+	// avoids waiting on a semi-sync ACK here, which would otherwise stall this exact statement
+	// right when replication may still be establishing between members.
+	return client.WithoutBinlog(ctx, reconcile)
 }
 
 func (r *userSqlReconciler) newReplUserOpts() (*userSqlOpts, error) {
