@@ -398,6 +398,15 @@ func (c *Client) WithoutBinlog(ctx context.Context, fn func(*Client) error) erro
 		return fmt.Errorf("error acquiring connection: %v", err)
 	}
 	defer conn.Close()
+	// sql.Conn.Close() only releases the connection back to the pool for reuse, it doesn't reset
+	// session variables. Without this, sql_log_bin=0 would stick to the underlying connection and
+	// could silently disable binlogging for an unrelated statement the next time the pool hands
+	// this same connection out.
+	defer func() {
+		resetCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn.ExecContext(resetCtx, "SET SESSION sql_log_bin=DEFAULT;") //nolint:errcheck
+	}()
 
 	if _, err := conn.ExecContext(ctx, "SET SESSION sql_log_bin=0;"); err != nil {
 		return fmt.Errorf("error disabling session binlog: %v", err)
